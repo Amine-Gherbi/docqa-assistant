@@ -1,0 +1,156 @@
+#!/usr/bin/env -S uv run python
+"""Materialise the corpus described by corpus.lock.json and verify every hash.
+
+The PDFs are deliberately not committed. This script is the only supported way to
+obtain them: it downloads each pinned URL, checks the byte length and SHA-256
+against the lock, and refuses to leave a corrupt file behind.
+
+Usage:
+    scripts/fetch-corpus [--dest DIR] [--lock FILE] [--force] [--check]
+
+Exit codes: 0 on success, 1 on any hash/size mismatch or download failure.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import sys
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+
+USER_AGENT = "docqa-assistant-fetch-corpus/1.0 (+local research corpus)"
+CHUNK = 1 << 20
+
+
+@dataclass
+class Entry:
+    """One pinned corpus file."""
+
+    doc_id: str
+    filename: str
+    url: str
+    sha256: str
+    bytes: int
+    title: str
+    licence: str
+
+
+def load_lock(path: Path) -> list[Entry]:
+    """Read and structurally validate the lock file."""
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if raw.get("version") != 1:
+        raise ValueError(f"unsupported lock version: {raw.get('version')!r}")
+    entries: list[Entry] = []
+    seen: set[str] = set()
+    for item in raw["files"]:
+        entry = Entry(
+            doc_id=item["doc_id"],
+            filename=item["filename"],
+            url=item["url"],
+            sha256=item["sha256"],
+            bytes=item["bytes"],
+            title=item["title"],
+            licence=item["licence"],
+        )
+        if entry.filename in seen:
+            raise ValueError(f"duplicate filename in lock: {entry.filename}")
+        if len(entry.sha256) != 64:
+            raise ValueError(f"bad sha256 for {entry.filename}")
+        seen.add(entry.filename)
+        entries.append(entry)
+    if len(entries) < 5:
+        raise ValueError(f"expected at least 5 corpus files, found {len(entries)}")
+    return entries
+
+
+def sha256_file(path: Path) -> str:
+    """Hash a file in 1 MiB blocks."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(CHUNK), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify(path: Path, entry: Entry) -> tuple[bool, str]:
+    """Check size and digest; returns (ok, reason)."""
+    size = path.stat().st_size
+    if size != entry.bytes:
+        return False, f"size {size} != locked {entry.bytes}"
+    digest = sha256_file(path)
+    if digest != entry.sha256:
+        return False, f"sha256 {digest} != locked {entry.sha256}"
+    return True, "ok"
+
+
+def download(entry: Entry, dest: Path) -> None:
+    """Download one file atomically via a .part file."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_suffix(dest.suffix + ".part")
+    request = urllib.request.Request(entry.url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=120) as response, part.open("wb") as out:
+        shutil.copyfileobj(response, out, length=CHUNK)
+    os.replace(part, dest)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Entry point."""
+    root = Path(__file__).resolve().parent.parent
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--lock", type=Path, default=root / "corpus.lock.json")
+    parser.add_argument("--dest", type=Path, default=root / "data" / "corpus")
+    parser.add_argument("--force", action="store_true", help="re-download even if valid")
+    parser.add_argument("--check", action="store_true", help="verify existing files only")
+    args = parser.parse_args(argv)
+
+    entries = load_lock(args.lock)
+    failures = 0
+    print(f"corpus lock: {args.lock} ({len(entries)} files)")
+    print(f"destination: {args.dest}")
+    for entry in entries:
+        target = args.dest / entry.filename
+        if target.exists() and not args.force:
+            ok, reason = verify(target, entry)
+            if ok:
+                print(f"  OK       {entry.filename:28s} (present)")
+                continue
+            if args.check:
+                print(f"  MISMATCH {entry.filename:28s} {reason}")
+                failures += 1
+                continue
+            print(f"  BAD      {entry.filename:28s} {reason}; re-downloading")
+        if args.check:
+            print(f"  MISSING  {entry.filename:28s}")
+            failures += 1
+            continue
+        try:
+            print(f"  GET      {entry.filename:28s} <- {entry.url}")
+            download(entry, target)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            print(f"  ERROR    {entry.filename:28s} {exc}")
+            target.unlink(missing_ok=True)
+            failures += 1
+            continue
+        ok, reason = verify(target, entry)
+        if ok:
+            print(f"  VERIFIED {entry.filename:28s} sha256={entry.sha256[:16]}…")
+        else:
+            print(f"  MISMATCH {entry.filename:28s} {reason}")
+            target.unlink(missing_ok=True)
+            failures += 1
+
+    if failures:
+        print(f"\nFAILED: {failures} file(s) missing or corrupt", file=sys.stderr)
+        return 1
+    print(f"\nAll {len(entries)} corpus files present and hash-verified.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
