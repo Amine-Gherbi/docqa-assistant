@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -24,6 +26,9 @@ EXIT_LOCK = 2
 EXIT_CAP = 3
 EXIT_CALIBRATION = 4
 EXIT_PROBE_REWRITTEN = 5
+EXIT_JUDGE_INVALID = 7
+
+JUDGE_REQUIRED = ("model", "prompt_sha256", "rubric_version", "temperature")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -32,8 +37,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    ingest = sub.add_parser("ingest", help="ingest one or more pinned PDFs")
-    ingest.add_argument("pdf", nargs="+", type=Path, help="PDF files listed in corpus.lock.json")
+    ingest = sub.add_parser("ingest", help="ingest or verify pinned PDFs")
+    ingest.add_argument(
+        "pdf", nargs="*", type=Path, help="PDF files listed in corpus.lock.json"
+    )
     ingest.add_argument(
         "--batch-size", type=int, default=32, help="embedding batch size (default 32)"
     )
@@ -46,19 +53,15 @@ def _parser() -> argparse.ArgumentParser:
     ingest.add_argument(
         "--no-migrate", action="store_true", help="skip 'alembic upgrade head'"
     )
-
-    db = sub.add_parser("db", help="database maintenance")
-    db_sub = db.add_subparsers(dest="db_command", required=True)
-    db_sub.add_parser("upgrade", help="apply alembic migrations")
-
-    verify = sub.add_parser("verify", help="verify fetched PDFs against corpus.lock.json")
-    verify.add_argument(
-        "pdf", nargs="*", type=Path, help="files to verify (default: every locked file)"
+    ingest.add_argument(
+        "--check",
+        action="store_true",
+        help="verify files against corpus.lock.json without storing anything",
     )
 
     serve = sub.add_parser("serve", help="run the answer API")
     serve.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1)")
-    serve.add_argument("--port", type=int, default=8100, help="port (default 8100)")
+    serve.add_argument("--port", type=int, default=8788, help="port (default 8788)")
     serve.add_argument(
         "--calibration", type=Path, default=None, help="override eval/calibration.json"
     )
@@ -74,11 +77,16 @@ def _parser() -> argparse.ArgumentParser:
         help="override DOCQA_STRUCTURED_OUTPUT",
     )
 
-    probe = sub.add_parser(
-        "probe-tool-choice",
-        help="check whether the configured gateway honours a forced tool call",
+    judge = sub.add_parser(
+        "judge-check",
+        help="validate the pinned judge protocol and report its measurement status",
     )
-    probe.add_argument("--json", action="store_true", help="print the verdict as JSON")
+    judge.add_argument("--json", action="store_true", help="print the verdict as JSON")
+    judge.add_argument(
+        "--probe-tool-choice",
+        action="store_true",
+        help="also probe whether the configured gateway honours a forced tool call",
+    )
 
     evaluate = sub.add_parser(
         "eval", help="run the fixed gold set, print Wilson intervals, enforce gates"
@@ -158,7 +166,10 @@ def _verify_all(settings: Settings, paths: list[Path]) -> None:
     targets = paths or [settings.corpus_dir / entry.filename for entry in lock.files]
     for path in targets:
         if not path.is_file():
-            raise FileNotFoundError(f"{path} is missing; run scripts/fetch-corpus")
+            raise FileNotFoundError(
+                f"{path} is missing; run scripts/fetch-corpus or "
+                "`uv run docqa ingest --check` after fetching"
+            )
         verify_file(path, lock)
         print(f"OK {path.name}")
 
@@ -215,6 +226,130 @@ def _run_probe(args: argparse.Namespace, settings: Settings) -> int:
     return EXIT_OK if verdict.honoured is not False else EXIT_PROBE_REWRITTEN
 
 
+def _read_flat_yaml(path: Path) -> dict[str, str]:
+    """Read the flat ``key: value`` judge protocol file.
+
+    The judge artifact is intentionally a small flat file; rejecting nesting is
+    better than silently mis-parsing a protocol that must be exact.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"cannot read {path}: {exc}") from exc
+    values: dict[str, str] = {}
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        key, separator, value = line.partition(":")
+        if not separator or not key.strip():
+            raise ValueError(f"{path}:{number}: expected 'key: value'")
+        key = key.strip()
+        if key in values:
+            raise ValueError(f"{path}:{number}: duplicate key {key!r}")
+        values[key] = value.strip().strip("'\"")
+    return values
+
+
+def _run_judge_check(args: argparse.Namespace, settings: Settings) -> int:
+    """Validate the judge protocol; never claim a reliability it did not measure."""
+    judge_path = settings.calibration_path.parent / "judge.yaml"
+    prompt_path = settings.calibration_path.parent / "judge-prompt.txt"
+    endpoint = os.environ.get("DOCQA_JUDGE_BASE_URL", "").strip()
+    record: dict[str, object] = {
+        "judge_yaml": str(judge_path),
+        "configured": judge_path.is_file(),
+        "endpoint_configured": bool(endpoint),
+        "generator_model": settings.model_name,
+        "status": "unverified",
+        "reason": "",
+    }
+    exit_code = EXIT_OK
+
+    if not judge_path.is_file():
+        record["reason"] = (
+            "eval/judge.yaml is absent; citation precision and faithfulness use "
+            "the deterministic rule-based checker, not a model judge"
+        )
+    else:
+        try:
+            protocol = _read_flat_yaml(judge_path)
+            missing = [name for name in JUDGE_REQUIRED if not protocol.get(name)]
+            if missing:
+                raise ValueError(f"missing required field(s): {', '.join(missing)}")
+            model = protocol["model"]
+            prompt_sha = protocol["prompt_sha256"].lower()
+            if len(prompt_sha) != 64 or any(
+                char not in "0123456789abcdef" for char in prompt_sha
+            ):
+                raise ValueError("prompt_sha256 must be 64 lower-case hex characters")
+            temperature = float(protocol["temperature"])
+            if temperature != 0.0:
+                raise ValueError("temperature must be 0 for a pinned judge")
+            if model == settings.model_name:
+                raise ValueError(
+                    f"judge model {model!r} equals the generator model; "
+                    "invariant 6 requires a different model"
+                )
+            prompt_matches: bool | None = None
+            if prompt_path.is_file():
+                digest = hashlib.sha256(prompt_path.read_bytes()).hexdigest()
+                prompt_matches = digest == prompt_sha
+                if not prompt_matches:
+                    raise ValueError(
+                        f"prompt_sha256 does not match {prompt_path.name} "
+                        f"(file {digest[:12]}…, protocol {prompt_sha[:12]}…)"
+                    )
+            record.update(
+                {
+                    "model": model,
+                    "prompt_sha256": prompt_sha,
+                    "prompt_file_matches": prompt_matches,
+                    "rubric_version": protocol["rubric_version"],
+                    "temperature": temperature,
+                    "model_differs_from_generator": True,
+                }
+            )
+            if not endpoint:
+                record["reason"] = (
+                    "judge protocol is pinned and valid, but DOCQA_JUDGE_BASE_URL "
+                    "is unset; no reliability (Cohen's kappa) was measured"
+                )
+            elif not prompt_path.is_file():
+                record["reason"] = (
+                    "judge endpoint is configured, but eval/judge-prompt.txt is "
+                    "absent so the pinned prompt cannot be verified"
+                )
+            else:
+                record["reason"] = (
+                    "judge endpoint and prompt are configured, but this build has "
+                    "no judge client or human anchor set; reliability is unmeasured"
+                )
+        except (OSError, ValueError) as exc:
+            record["status"] = "invalid"
+            record["reason"] = str(exc)
+            exit_code = EXIT_JUDGE_INVALID
+
+    if args.json:
+        print(json.dumps(record, indent=2, sort_keys=True))
+    else:
+        print(f"judge protocol: {judge_path}")
+        if record["configured"]:
+            print(f"  model: {record.get('model', '—')} (generator: {settings.model_name})")
+            print(f"  prompt_sha256: {record.get('prompt_sha256', '—')}")
+            print(f"  rubric_version: {record.get('rubric_version', '—')}")
+            print(f"  temperature: {record.get('temperature', '—')}")
+        print(f"  endpoint: {'set' if endpoint else 'unset (DOCQA_JUDGE_BASE_URL)'}")
+        print(f"  reason: {record['reason']}")
+        print(f"status: {str(record['status']).upper()}")
+
+    if getattr(args, "probe_tool_choice", False):
+        probe_exit = _run_probe(args, settings)
+        if probe_exit != EXIT_OK:
+            return probe_exit
+    return exit_code
+
+
 def _run_eval(args: argparse.Namespace, settings: Settings) -> int:
     from docqa.eval import (
         DEFAULT_ABLATION_REPORT_PATH,
@@ -256,6 +391,11 @@ def _run_eval(args: argparse.Namespace, settings: Settings) -> int:
 
 def _run_ingest(args: argparse.Namespace, settings: Settings) -> int:
     paths: list[Path] = list(args.pdf)
+    if args.check:
+        _verify_all(settings, paths)
+        return EXIT_OK
+    if not paths:
+        raise ValueError("provide at least one PDF, or pass --check to verify the corpus")
     _verify_inputs(settings, paths)
     choice = build_embedder(settings)
     _print_banner(choice)
@@ -275,19 +415,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.command == "ingest":
             return _run_ingest(args, settings)
-        if args.command == "db":
-            upgrade_to_head(settings.database_url)
-            print("database is at migration head")
-            return EXIT_OK
-        if args.command == "verify":
-            _verify_all(settings, list(args.pdf))
-            return EXIT_OK
         if args.command == "serve":
             return _run_serve(args, settings)
-        if args.command == "probe-tool-choice":
-            return _run_probe(args, settings)
         if args.command == "eval":
             return _run_eval(args, settings)
+        if args.command == "judge-check":
+            return _run_judge_check(args, settings)
     except CalibrationUnavailable as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_CALIBRATION

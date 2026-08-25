@@ -195,3 +195,17 @@ uv run docqa serve --uncalibrated       # explicit, recorded in responses
 uv run docqa probe-tool-choice --json   # real request; gateway verdict
 uv run python scripts/fit_calibration.py
 ```
+
+## k6 concurrency budget on this host
+
+`scripts/k6-ask.js` gates full-response p95 at 5000 ms by default (CI keeps that number).
+On this CPU-only host, with ONNX inference behind `Semaphore(2)`, four concurrent askers
+measure **p95 7.92 s** (avg 6.02 s, max 8.14 s, 18 iterations, 4 VUs, 30 s), so a local
+verify must state its own budget:
+
+```sh
+DOCQA_K6_P95_MS=9000 bash scripts/verify.sh
+```
+
+That is a measured CPU limitation, not a passing grade: the 5 s gate is crossed locally,
+and it stays crossed until inference has a GPU or a smaller model.

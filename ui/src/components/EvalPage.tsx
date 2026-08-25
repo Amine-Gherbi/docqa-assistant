@@ -82,7 +82,12 @@ interface MetricRow {
 function confidenceInterval(
   entry: Record<string, unknown>,
 ): [number, number] | null {
-  for (const key of ['wilson_ci', 'ci', 'confidence_interval']) {
+  for (const key of [
+    'wilson_95',
+    'wilson_ci',
+    'ci',
+    'confidence_interval',
+  ]) {
     const value = entry[key];
     if (
       Array.isArray(value) &&

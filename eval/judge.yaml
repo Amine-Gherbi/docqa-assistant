@@ -1,0 +1,7 @@
+# Pinned judge protocol (invariant 6). The generator default is claude-sonnet-5-5,
+# so the judge must be a different exact model id. Reliability is UNVERIFIED in
+# this build: no judge endpoint and no human anchor set are configured.
+model: claude-opus-5-5
+prompt_sha256: c06e4c341da1276cf168f23e90eea583e6d106385a9727421529d9fbb2b54b68
+rubric_version: 1
+temperature: 0
