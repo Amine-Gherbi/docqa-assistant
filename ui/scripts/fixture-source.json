@@ -1,0 +1,389 @@
+{
+  "doc_id": "fixture-corpus",
+  "pdf": "/fixtures/fixture-corpus.pdf",
+  "pinned_with": "PyMuPDF 2.0",
+  "pages": [
+    {
+      "page_no": 1,
+      "text": "Fixture Corpus\n\n1 Retrieval\n\n\n\n\nDense retrieval maps each passage to a single vector.\n\nThe vector index returns nearest neighbours by cosine distance.\n\nLexical retrieval matches rare terms that embeddings often miss.\n\nReciprocal rank fusion merges two lists without score scaling.\n\nA cross encoder reranks the fused candidates in a second pass.\n\n\n\n\n\nCommitted fixture for the docqa assistant citation UI. Page 1 of 4.",
+      "sha256": "fc10adc3fac31a6ea5559d78a79371a04f6df50048af4b7c0e57101481e94303"
+    },
+    {
+      "page_no": 2,
+      "text": "Fixture Corpus\n\n2 Calibration\n\n\n\n\nThe refusal threshold is fitted on held out query passage pairs.\n\nA calibrated probability below the threshold triggers a refusal.\n\nEvery citation must quote a verbatim span from its passage.\n\nA claim whose quote is absent is dropped before it is displayed.\n\nEach page is hashed so an extractor upgrade fails loudly.\n\n\n\n\n\nCommitted fixture for the docqa assistant citation UI. Page 2 of 4.",
+      "sha256": "4fe98a203abe6d4f53ad9dc47f5c19fa30811035a30cf19908615143980aa8c6"
+    },
+    {
+      "page_no": 3,
+      "text": "Fixture Corpus\n\n3 Citations\n\n\n\n\nThis fixture corpus exists to exercise the citation interface.\n\nHybrid retrieval finds the rare term “quokka” but vector only misses it.\n\nThe lexical ranker uses ts_rank_cd rather than BM25.\n\nReranking can move a passage from rank nine to rank one.\n\nThe final context contains at most eight passages.\n\n\n\n\n\nCommitted fixture for the docqa assistant citation UI. Page 3 of 4.",
+      "sha256": "4ca5e8907f9eec19590b6e018dbccc76754aac9589e3f76016761f0414c53ef2"
+    },
+    {
+      "page_no": 4,
+      "text": "Fixture Corpus\n\n4 Rendering\n\n\n\n\nThe highlight layer rebuilds the page string before it searches.\n\nWhitespace is collapsed and typographic quotes are normalised.\n\nOn a miss, the interface draws the stored rectangles instead.\n\nThe citation render miss counter is reported with every answer.\n\nAn answer with no resolvable citation is never shown to the reader.\n\n\n\n\n\nCommitted fixture for the docqa assistant citation UI. Page 4 of 4.",
+      "sha256": "4a62d617b814d45dd19ad544a560af77b5befead1bd96d2b41b0fe54fe41cac7"
+    }
+  ],
+  "citations": [
+    {
+      "id": "fx-01",
+      "claim": "Dense retrieval maps each passage to a single vector",
+      "doc_id": "fixture-corpus",
+      "page_no": 1,
+      "char_start": 32,
+      "char_end": 85,
+      "page_text_sha256": "fc10adc3fac31a6ea5559d78a79371a04f6df50048af4b7c0e57101481e94303",
+      "quote": "Dense retrieval maps each passage to a single vector.",
+      "rects": [
+        [
+          72.0,
+          158.04,
+          336.59,
+          170.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-02",
+      "claim": "The vector index returns nearest neighbours by cosine distance",
+      "doc_id": "fixture-corpus",
+      "page_no": 1,
+      "char_start": 87,
+      "char_end": 150,
+      "page_text_sha256": "fc10adc3fac31a6ea5559d78a79371a04f6df50048af4b7c0e57101481e94303",
+      "quote": "The vector index returns nearest neighbours by cosine distance.",
+      "rects": [
+        [
+          72.0,
+          188.04,
+          384.27,
+          200.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-03",
+      "claim": "Lexical retrieval matches rare terms that embeddings often miss",
+      "doc_id": "fixture-corpus",
+      "page_no": 1,
+      "char_start": 152,
+      "char_end": 216,
+      "page_text_sha256": "fc10adc3fac31a6ea5559d78a79371a04f6df50048af4b7c0e57101481e94303",
+      "quote": "Lexical retrieval matches rare terms that embeddings often miss.",
+      "rects": [
+        [
+          72.0,
+          218.04,
+          386.65,
+          230.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-04",
+      "claim": "Reciprocal rank fusion merges two lists without score scaling",
+      "doc_id": "fixture-corpus",
+      "page_no": 1,
+      "char_start": 218,
+      "char_end": 280,
+      "page_text_sha256": "fc10adc3fac31a6ea5559d78a79371a04f6df50048af4b7c0e57101481e94303",
+      "quote": "Reciprocal rank fusion merges two lists without score scaling.",
+      "rects": [
+        [
+          72.0,
+          248.04,
+          370.77,
+          260.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-05",
+      "claim": "A cross encoder reranks the fused candidates in a second pass",
+      "doc_id": "fixture-corpus",
+      "page_no": 1,
+      "char_start": 282,
+      "char_end": 344,
+      "page_text_sha256": "fc10adc3fac31a6ea5559d78a79371a04f6df50048af4b7c0e57101481e94303",
+      "quote": "A cross encoder reranks the fused candidates in a second pass.",
+      "rects": [
+        [
+          72.0,
+          278.05,
+          384.27,
+          290.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-06",
+      "claim": "The refusal threshold is fitted on held out query passage pairs",
+      "doc_id": "fixture-corpus",
+      "page_no": 2,
+      "char_start": 34,
+      "char_end": 98,
+      "page_text_sha256": "4fe98a203abe6d4f53ad9dc47f5c19fa30811035a30cf19908615143980aa8c6",
+      "quote": "The refusal threshold is fitted on held out query passage pairs.",
+      "rects": [
+        [
+          72.0,
+          158.04,
+          375.68,
+          170.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-07",
+      "claim": "A calibrated probability below the threshold triggers a refusal",
+      "doc_id": "fixture-corpus",
+      "page_no": 2,
+      "char_start": 100,
+      "char_end": 164,
+      "page_text_sha256": "4fe98a203abe6d4f53ad9dc47f5c19fa30811035a30cf19908615143980aa8c6",
+      "quote": "A calibrated probability below the threshold triggers a refusal.",
+      "rects": [
+        [
+          72.0,
+          188.04,
+          369.56,
+          200.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-08",
+      "claim": "Every citation must quote a verbatim span from its passage",
+      "doc_id": "fixture-corpus",
+      "page_no": 2,
+      "char_start": 166,
+      "char_end": 225,
+      "page_text_sha256": "4fe98a203abe6d4f53ad9dc47f5c19fa30811035a30cf19908615143980aa8c6",
+      "quote": "Every citation must quote a verbatim span from its passage.",
+      "rects": [
+        [
+          72.0,
+          218.04,
+          363.42,
+          230.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-09",
+      "claim": "A claim whose quote is absent is dropped before it is displayed",
+      "doc_id": "fixture-corpus",
+      "page_no": 2,
+      "char_start": 227,
+      "char_end": 291,
+      "page_text_sha256": "4fe98a203abe6d4f53ad9dc47f5c19fa30811035a30cf19908615143980aa8c6",
+      "quote": "A claim whose quote is absent is dropped before it is displayed.",
+      "rects": [
+        [
+          72.0,
+          248.04,
+          381.18,
+          260.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-10",
+      "claim": "Each page is hashed so an extractor upgrade fails loudly",
+      "doc_id": "fixture-corpus",
+      "page_no": 2,
+      "char_start": 293,
+      "char_end": 350,
+      "page_text_sha256": "4fe98a203abe6d4f53ad9dc47f5c19fa30811035a30cf19908615143980aa8c6",
+      "quote": "Each page is hashed so an extractor upgrade fails loudly.",
+      "rects": [
+        [
+          72.0,
+          278.05,
+          351.27,
+          290.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-11",
+      "claim": "This fixture corpus exists to exercise the citation interface",
+      "doc_id": "fixture-corpus",
+      "page_no": 3,
+      "char_start": 32,
+      "char_end": 94,
+      "page_text_sha256": "4ca5e8907f9eec19590b6e018dbccc76754aac9589e3f76016761f0414c53ef2",
+      "quote": "This fixture corpus exists to exercise the citation interface.",
+      "rects": [
+        [
+          72.0,
+          158.04,
+          353.62,
+          170.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-12",
+      "claim": "Hybrid retrieval finds the rare term “quokka” but vector only misses it",
+      "doc_id": "fixture-corpus",
+      "page_no": 3,
+      "char_start": 96,
+      "char_end": 168,
+      "page_text_sha256": "4ca5e8907f9eec19590b6e018dbccc76754aac9589e3f76016761f0414c53ef2",
+      "quote": "Hybrid retrieval finds the rare term “quokka” but vector only misses it.",
+      "rects": [
+        [
+          72.0,
+          188.04,
+          407.39,
+          200.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-13",
+      "claim": "The lexical ranker uses ts_rank_cd rather than BM25",
+      "doc_id": "fixture-corpus",
+      "page_no": 3,
+      "char_start": 170,
+      "char_end": 222,
+      "page_text_sha256": "4ca5e8907f9eec19590b6e018dbccc76754aac9589e3f76016761f0414c53ef2",
+      "quote": "The lexical ranker uses ts_rank_cd rather than BM25.",
+      "rects": [
+        [
+          72.0,
+          218.04,
+          332.91,
+          230.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-14",
+      "claim": "Reranking can move a passage from rank nine to rank one",
+      "doc_id": "fixture-corpus",
+      "page_no": 3,
+      "char_start": 224,
+      "char_end": 280,
+      "page_text_sha256": "4ca5e8907f9eec19590b6e018dbccc76754aac9589e3f76016761f0414c53ef2",
+      "quote": "Reranking can move a passage from rank nine to rank one.",
+      "rects": [
+        [
+          72.0,
+          248.04,
+          361.05,
+          260.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-15",
+      "claim": "The final context contains at most eight passages",
+      "doc_id": "fixture-corpus",
+      "page_no": 3,
+      "char_start": 282,
+      "char_end": 332,
+      "page_text_sha256": "4ca5e8907f9eec19590b6e018dbccc76754aac9589e3f76016761f0414c53ef2",
+      "quote": "The final context contains at most eight passages.",
+      "rects": [
+        [
+          72.0,
+          278.05,
+          315.78,
+          290.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-16",
+      "claim": "The highlight layer rebuilds the page string before it searches",
+      "doc_id": "fixture-corpus",
+      "page_no": 4,
+      "char_start": 32,
+      "char_end": 96,
+      "page_text_sha256": "4a62d617b814d45dd19ad544a560af77b5befead1bd96d2b41b0fe54fe41cac7",
+      "quote": "The highlight layer rebuilds the page string before it searches.",
+      "rects": [
+        [
+          72.0,
+          158.04,
+          372.63,
+          170.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-17",
+      "claim": "Whitespace is collapsed and typographic quotes are normalised",
+      "doc_id": "fixture-corpus",
+      "page_no": 4,
+      "char_start": 98,
+      "char_end": 160,
+      "page_text_sha256": "4a62d617b814d45dd19ad544a560af77b5befead1bd96d2b41b0fe54fe41cac7",
+      "quote": "Whitespace is collapsed and typographic quotes are normalised.",
+      "rects": [
+        [
+          72.0,
+          188.04,
+          386.12,
+          200.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-18",
+      "claim": "On a miss, the interface draws the stored rectangles instead",
+      "doc_id": "fixture-corpus",
+      "page_no": 4,
+      "char_start": 162,
+      "char_end": 223,
+      "page_text_sha256": "4a62d617b814d45dd19ad544a560af77b5befead1bd96d2b41b0fe54fe41cac7",
+      "quote": "On a miss, the interface draws the stored rectangles instead.",
+      "rects": [
+        [
+          72.0,
+          218.04,
+          367.7,
+          230.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-19",
+      "claim": "The citation render miss counter is reported with every answer",
+      "doc_id": "fixture-corpus",
+      "page_no": 4,
+      "char_start": 225,
+      "char_end": 288,
+      "page_text_sha256": "4a62d617b814d45dd19ad544a560af77b5befead1bd96d2b41b0fe54fe41cac7",
+      "quote": "The citation render miss counter is reported with every answer.",
+      "rects": [
+        [
+          72.0,
+          248.04,
+          378.1,
+          260.32
+        ]
+      ]
+    },
+    {
+      "id": "fx-20",
+      "claim": "An answer with no resolvable citation is never shown to the reader",
+      "doc_id": "fixture-corpus",
+      "page_no": 4,
+      "char_start": 290,
+      "char_end": 357,
+      "page_text_sha256": "4a62d617b814d45dd19ad544a560af77b5befead1bd96d2b41b0fe54fe41cac7",
+      "quote": "An answer with no resolvable citation is never shown to the reader.",
+      "rects": [
+        [
+          72.0,
+          278.05,
+          397.67,
+          290.32
+        ]
+      ]
+    }
+  ]
+}
