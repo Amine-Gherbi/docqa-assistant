@@ -12,6 +12,7 @@ from pathlib import Path
 from docqa.answer import CalibrationUnavailable
 from docqa.config import Settings, get_settings
 from docqa.db import upgrade_to_head
+from docqa.eval import EvalError
 from docqa.ingest.chunking import TokenCapViolation
 from docqa.ingest.embedder import EmbedderChoice, build_embedder
 from docqa.ingest.lock import CorpusLockError, LockMismatch, load_lock, verify_file
@@ -78,6 +79,31 @@ def _parser() -> argparse.ArgumentParser:
         help="check whether the configured gateway honours a forced tool call",
     )
     probe.add_argument("--json", action="store_true", help="print the verdict as JSON")
+
+    evaluate = sub.add_parser(
+        "eval", help="run the fixed gold set, print Wilson intervals, enforce gates"
+    )
+    evaluate.add_argument(
+        "--gold",
+        type=Path,
+        default=None,
+        help="gold JSONL (default: eval/gold.jsonl)",
+    )
+    evaluate.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="report path (default: eval-report.json, or eval-report-ablation.json)",
+    )
+    evaluate.add_argument(
+        "--ablate",
+        choices=["vector-only"],
+        default=None,
+        help="weakened retriever: vector-only top-3 (writes a separate report)",
+    )
+    evaluate.add_argument(
+        "--k", type=int, default=None, help="final chunks kept (default 8; ablation 3)"
+    )
     return parser
 
 
@@ -189,6 +215,45 @@ def _run_probe(args: argparse.Namespace, settings: Settings) -> int:
     return EXIT_OK if verdict.honoured is not False else EXIT_PROBE_REWRITTEN
 
 
+def _run_eval(args: argparse.Namespace, settings: Settings) -> int:
+    from docqa.eval import (
+        DEFAULT_ABLATION_REPORT_PATH,
+        DEFAULT_GOLD_PATH,
+        DEFAULT_REPORT_PATH,
+        EvalConfig,
+        evaluate,
+        render,
+        write_report,
+    )
+
+    ablated = args.ablate == "vector-only"
+    k = args.k if args.k is not None else (3 if ablated else 8)
+    config = EvalConfig(
+        mode="vector" if ablated else "hybrid_rerank",
+        k=k,
+        label="ablate:vector-only-top3" if ablated else "production",
+        ablated=ablated,
+    )
+    out = args.out or (DEFAULT_ABLATION_REPORT_PATH if ablated else DEFAULT_REPORT_PATH)
+    report = asyncio.run(
+        evaluate(
+            config,
+            settings=settings,
+            gold_path=args.gold or DEFAULT_GOLD_PATH,
+        )
+    )
+    write_report(report, out)
+    print(render(report))
+    print(f"Report: {out}")
+    if not report.passed:
+        print(
+            f"GATE FAILURE: exit {6}; see {out}",
+            file=sys.stderr,
+        )
+        return 6
+    return EXIT_OK
+
+
 def _run_ingest(args: argparse.Namespace, settings: Settings) -> int:
     paths: list[Path] = list(args.pdf)
     _verify_inputs(settings, paths)
@@ -221,6 +286,8 @@ def main(argv: list[str] | None = None) -> int:
             return _run_serve(args, settings)
         if args.command == "probe-tool-choice":
             return _run_probe(args, settings)
+        if args.command == "eval":
+            return _run_eval(args, settings)
     except CalibrationUnavailable as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_CALIBRATION
@@ -230,7 +297,7 @@ def main(argv: list[str] | None = None) -> int:
     except TokenCapViolation as exc:
         print(f"TOKEN CAP VIOLATION: {exc}", file=sys.stderr)
         return EXIT_CAP
-    except (CorpusLockError, FileNotFoundError, ValueError) as exc:
+    except (CorpusLockError, EvalError, FileNotFoundError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_ERROR
     print(f"unknown command: {args.command}", file=sys.stderr)

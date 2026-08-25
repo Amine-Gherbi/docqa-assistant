@@ -123,6 +123,84 @@ class RetrievedChunk:
     final_rank: int
 
 
+PREVIEW_CHARS = 240
+
+
+@dataclass(frozen=True)
+class TracePreview:
+    """The stable identifying fields every trace row carries."""
+
+    chunk_id: int
+    doc_id: str
+    page_no: int
+    breadcrumb: str
+    preview: str
+
+
+@dataclass(frozen=True)
+class VectorTraceHit(TracePreview):
+    """One vector candidate, with cosine *distance* (lower is closer)."""
+
+    rank: int
+    cosine_distance: float
+
+
+@dataclass(frozen=True)
+class LexicalTraceHit(TracePreview):
+    """One lexical candidate, with its ``ts_rank_cd`` score."""
+
+    rank: int
+    ts_rank_cd: float
+
+
+@dataclass(frozen=True)
+class FusionTraceHit(TracePreview):
+    """One RRF-fused candidate and how reranking moved it."""
+
+    rrf_rank: int
+    rrf_score: float
+    vector_rank: int | None
+    lexical_rank: int | None
+    rerank_rank: int | None
+    rank_delta: int | None
+
+
+@dataclass(frozen=True)
+class RerankTraceHit(TracePreview):
+    """One reranked candidate; ``kept`` means it entered the final context."""
+
+    rerank_rank: int
+    rrf_rank: int
+    rrf_score: float
+    vector_rank: int | None
+    lexical_rank: int | None
+    rerank_score: float
+    kept: bool
+
+
+@dataclass(frozen=True)
+class RetrievalTrace:
+    """Everything the UI drawer needs to make retrieval inspectable."""
+
+    mode: RetrievalMode
+    embedder: str
+    reranker: str
+    vector_hits: tuple[VectorTraceHit, ...]
+    lexical_hits: tuple[LexicalTraceHit, ...]
+    fusion_hits: tuple[FusionTraceHit, ...]
+    rerank_hits: tuple[RerankTraceHit, ...]
+    context_chunk_ids: tuple[int, ...]
+    context_tokens: int
+
+
+@dataclass(frozen=True)
+class RetrievalResult:
+    """Final context plus the trace that produced it."""
+
+    chunks: tuple[RetrievedChunk, ...]
+    trace: RetrievalTrace
+
+
 @runtime_checkable
 class CandidateSource(Protocol):
     """The two candidate lists fusion consumes."""
@@ -270,7 +348,101 @@ def _retrieved(fused: FusedChunk, rerank_score: float | None, rank: int) -> Retr
     )
 
 
-async def retrieve(
+def _preview(chunk: ScoredChunk) -> str:
+    """Return a short, single-line preview for trace rows."""
+    return " ".join(chunk.text.split())[:PREVIEW_CHARS]
+
+
+def _trace_base(chunk: ScoredChunk) -> TracePreview:
+    """Build the identifying fields shared by every trace row."""
+    return TracePreview(
+        chunk_id=chunk.chunk_id,
+        doc_id=chunk.doc_id,
+        page_no=chunk.page_no,
+        breadcrumb=chunk.breadcrumb,
+        preview=_preview(chunk),
+    )
+
+
+def _context_tokens(chunks: Sequence[RetrievedChunk], embedder: Embedder) -> int:
+    """Count the tokens of the chunk texts that enter the answer prompt."""
+    return sum(embedder.counter.count(chunk.text) for chunk in chunks)
+
+
+def _vector_row(chunk: ScoredChunk, rank: int) -> VectorTraceHit:
+    """Build one vector-stage trace row."""
+    base = _trace_base(chunk)
+    return VectorTraceHit(
+        chunk_id=base.chunk_id,
+        doc_id=base.doc_id,
+        page_no=base.page_no,
+        breadcrumb=base.breadcrumb,
+        preview=base.preview,
+        rank=rank,
+        cosine_distance=1.0 - chunk.score,
+    )
+
+
+def _lexical_row(chunk: ScoredChunk, rank: int) -> LexicalTraceHit:
+    """Build one lexical-stage trace row."""
+    base = _trace_base(chunk)
+    return LexicalTraceHit(
+        chunk_id=base.chunk_id,
+        doc_id=base.doc_id,
+        page_no=base.page_no,
+        breadcrumb=base.breadcrumb,
+        preview=base.preview,
+        rank=rank,
+        ts_rank_cd=chunk.score,
+    )
+
+
+def _fusion_row(
+    entry: FusedChunk, rank: int, rerank_rank: int | None
+) -> FusionTraceHit:
+    """Build one fusion-stage trace row, including the rerank move."""
+    base = _trace_base(entry.chunk)
+    return FusionTraceHit(
+        chunk_id=base.chunk_id,
+        doc_id=base.doc_id,
+        page_no=base.page_no,
+        breadcrumb=base.breadcrumb,
+        preview=base.preview,
+        rrf_rank=rank,
+        rrf_score=entry.rrf_score,
+        vector_rank=entry.vector_rank,
+        lexical_rank=entry.lexical_rank,
+        rerank_rank=rerank_rank,
+        rank_delta=None if rerank_rank is None else rerank_rank - rank,
+    )
+
+
+def _rerank_row(
+    entry: FusedChunk,
+    rank: int,
+    rrf_rank: int,
+    score: float,
+    k: int,
+) -> RerankTraceHit:
+    """Build one reranked trace row."""
+    base = _trace_base(entry.chunk)
+    return RerankTraceHit(
+        chunk_id=base.chunk_id,
+        doc_id=base.doc_id,
+        page_no=base.page_no,
+        breadcrumb=base.breadcrumb,
+        preview=base.preview,
+        rerank_rank=rank,
+        rrf_rank=rrf_rank,
+        rrf_score=entry.rrf_score,
+        vector_rank=entry.vector_rank,
+        lexical_rank=entry.lexical_rank,
+        rerank_score=score,
+        kept=rank <= k,
+    )
+
+
+async def retrieve_with_trace(
     query: str,
     k: int = 8,
     *,
@@ -282,12 +454,13 @@ async def retrieve(
     rrf_k: int = DEFAULT_RRF_K,
     rerank_limit: int = DEFAULT_RERANK_LIMIT,
     mode: RetrievalMode = "hybrid_rerank",
-) -> list[RetrievedChunk]:
-    """Return up to ``k`` chunks in final order with the full retrieval trace.
+) -> RetrievalResult:
+    """Return up to ``k`` chunks plus the numbers behind every stage.
 
     ``mode`` exists for the ablation: ``"vector"`` skips the lexical path and
     fusion, ``"hybrid"`` stops after RRF, and ``"hybrid_rerank"`` is the
-    production path.
+    production path. The trace always names all five stages; stages a mode skips
+    are empty rather than fabricated.
     """
     if k < 1:
         raise ValueError("k must be at least 1")
@@ -303,29 +476,86 @@ async def retrieve(
 
     if mode == "vector":
         hits = await source.vector_candidates(query_vector, k)
-        results = [
+        chunks = tuple(
             _retrieved(
                 FusedChunk(chunk=hit, vector_rank=rank, lexical_rank=None, rrf_score=0.0),
                 rerank_score=None,
                 rank=rank,
             )
             for rank, hit in enumerate(hits[:k], start=1)
-        ]
-        return results
+        )
+        vector_trace = tuple(
+            _vector_row(hit, rank)
+            for rank, hit in enumerate(hits[:k], start=1)
+        )
+        return RetrievalResult(
+            chunks=chunks,
+            trace=RetrievalTrace(
+                mode=mode,
+                embedder=embedder.name,
+                reranker=reranker.name,
+                vector_hits=vector_trace,
+                lexical_hits=(),
+                fusion_hits=(),
+                rerank_hits=(),
+                context_chunk_ids=tuple(chunk.chunk_id for chunk in chunks),
+                context_tokens=_context_tokens(chunks, embedder),
+            ),
+        )
 
     vector_hits = await source.vector_candidates(query_vector, vector_limit)
     lexical_hits = await source.lexical_candidates(query, lexical_limit)
     fused = reciprocal_rank_fusion(vector_hits, lexical_hits, k=rrf_k)
 
+    vector_trace = tuple(
+        _vector_row(hit, rank)
+        for rank, hit in enumerate(vector_hits, start=1)
+    )
+    lexical_trace = tuple(
+        _lexical_row(hit, rank)
+        for rank, hit in enumerate(lexical_hits, start=1)
+    )
+
     if mode == "hybrid":
-        return [
+        chunks = tuple(
             _retrieved(entry, rerank_score=None, rank=rank)
             for rank, entry in enumerate(fused[:k], start=1)
-        ]
+        )
+        fusion_trace = tuple(
+            _fusion_row(entry, rank, None)
+            for rank, entry in enumerate(fused[:k], start=1)
+        )
+        return RetrievalResult(
+            chunks=chunks,
+            trace=RetrievalTrace(
+                mode=mode,
+                embedder=embedder.name,
+                reranker=reranker.name,
+                vector_hits=vector_trace,
+                lexical_hits=lexical_trace,
+                fusion_hits=fusion_trace,
+                rerank_hits=(),
+                context_chunk_ids=tuple(chunk.chunk_id for chunk in chunks),
+                context_tokens=_context_tokens(chunks, embedder),
+            ),
+        )
 
     candidates = fused[:rerank_limit]
     if not candidates:
-        return []
+        return RetrievalResult(
+            chunks=(),
+            trace=RetrievalTrace(
+                mode=mode,
+                embedder=embedder.name,
+                reranker=reranker.name,
+                vector_hits=vector_trace,
+                lexical_hits=lexical_trace,
+                fusion_hits=(),
+                rerank_hits=(),
+                context_chunk_ids=(),
+                context_tokens=0,
+            ),
+        )
     rerank_scores = await reranker.score(query, [entry.chunk.text for entry in candidates])
     if len(rerank_scores) != len(candidates):
         raise RuntimeError(
@@ -338,7 +568,75 @@ async def retrieve(
         zip(candidates, rerank_scores, strict=True),
         key=lambda pair: (-pair[1], -pair[0].rrf_score, pair[0].chunk.chunk_id),
     )
-    return [
+    chunks = tuple(
         _retrieved(entry, rerank_score=score, rank=rank)
         for rank, (entry, score) in enumerate(ranked[:k], start=1)
-    ]
+    )
+
+    rrf_rank_by_id = {
+        entry.chunk.chunk_id: rank for rank, entry in enumerate(candidates, start=1)
+    }
+    rerank_by_id = {
+        entry.chunk.chunk_id: (rank, score)
+        for rank, (entry, score) in enumerate(ranked, start=1)
+    }
+    fusion_trace = tuple(
+        _fusion_row(entry, rank, rerank_by_id[entry.chunk.chunk_id][0])
+        for rank, entry in enumerate(candidates, start=1)
+    )
+    rerank_trace = tuple(
+        _rerank_row(
+            entry,
+            rank,
+            rrf_rank_by_id[entry.chunk.chunk_id],
+            score,
+            k,
+        )
+        for rank, (entry, score) in enumerate(ranked, start=1)
+    )
+    return RetrievalResult(
+        chunks=chunks,
+        trace=RetrievalTrace(
+            mode=mode,
+            embedder=embedder.name,
+            reranker=reranker.name,
+            vector_hits=vector_trace,
+            lexical_hits=lexical_trace,
+            fusion_hits=fusion_trace,
+            rerank_hits=rerank_trace,
+            context_chunk_ids=tuple(chunk.chunk_id for chunk in chunks),
+            context_tokens=_context_tokens(chunks, embedder),
+        ),
+    )
+
+
+async def retrieve(
+    query: str,
+    k: int = 8,
+    *,
+    embedder: Embedder,
+    source: CandidateSource,
+    reranker: Reranker,
+    vector_limit: int = DEFAULT_VECTOR_LIMIT,
+    lexical_limit: int = DEFAULT_LEXICAL_LIMIT,
+    rrf_k: int = DEFAULT_RRF_K,
+    rerank_limit: int = DEFAULT_RERANK_LIMIT,
+    mode: RetrievalMode = "hybrid_rerank",
+) -> list[RetrievedChunk]:
+    """Return up to ``k`` chunks in final order (the R2 contract).
+
+    Callers that need the trace use :func:`retrieve_with_trace` instead.
+    """
+    result = await retrieve_with_trace(
+        query,
+        k,
+        embedder=embedder,
+        source=source,
+        reranker=reranker,
+        vector_limit=vector_limit,
+        lexical_limit=lexical_limit,
+        rrf_k=rrf_k,
+        rerank_limit=rerank_limit,
+        mode=mode,
+    )
+    return list(result.chunks)
