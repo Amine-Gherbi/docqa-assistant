@@ -12,7 +12,7 @@ import hashlib
 import itertools
 import math
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol, cast, runtime_checkable
 
@@ -20,17 +20,14 @@ import anyio
 
 from docqa.config import EMBEDDING_DIM, Settings
 from docqa.ingest.tokens import HashTokenCounter, ModelTokenCounter, TokenCounter
+from docqa.onnx import onnx_semaphore
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+", re.IGNORECASE)
-_SEMAPHORE: anyio.Semaphore | None = None
 
 
 def _embedding_semaphore() -> anyio.Semaphore:
-    """Lazily create the process-wide ONNX concurrency limiter."""
-    global _SEMAPHORE
-    if _SEMAPHORE is None:
-        _SEMAPHORE = anyio.Semaphore(2)
-    return _SEMAPHORE
+    """Return the shared ONNX concurrency limiter."""
+    return onnx_semaphore()
 
 
 @runtime_checkable
@@ -43,7 +40,11 @@ class Embedder(Protocol):
     counter: TokenCounter
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
-        """Embed a batch, preserving order."""
+        """Embed a batch of passages, preserving order."""
+        ...
+
+    async def embed_query(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed a batch of queries, preserving order."""
         ...
 
 
@@ -64,14 +65,20 @@ class FastEmbedEmbedder:
         inner = cast(Any, self._model).model
         self.counter: TokenCounter = ModelTokenCounter(inner.tokenizer)
 
-    def _embed_sync(self, texts: list[str]) -> list[list[float]]:
-        vectors: list[list[float]] = []
-        for vector in self._model.embed(texts):
+    def _collect(self, vectors: Iterable[Iterable[float]]) -> list[list[float]]:
+        collected: list[list[float]] = []
+        for vector in vectors:
             values = [float(value) for value in vector]
             if len(values) != self.dim:
                 raise ValueError(f"expected {self.dim}-d embedding, got {len(values)}")
-            vectors.append(values)
-        return vectors
+            collected.append(values)
+        return collected
+
+    def _embed_sync(self, texts: list[str]) -> list[list[float]]:
+        return self._collect(self._model.embed(texts))
+
+    def _embed_query_sync(self, texts: list[str]) -> list[list[float]]:
+        return self._collect(self._model.query_embed(texts))
 
     async def embed(self, texts: Sequence[str]) -> list[list[float]]:
         """Run ONNX inference in a worker thread, at most two batches at once."""
@@ -79,6 +86,13 @@ class FastEmbedEmbedder:
             return []
         async with _embedding_semaphore():
             return await anyio.to_thread.run_sync(self._embed_sync, list(texts))
+
+    async def embed_query(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed queries through the model's query path (bge adds its prefix)."""
+        if not texts:
+            return []
+        async with _embedding_semaphore():
+            return await anyio.to_thread.run_sync(self._embed_query_sync, list(texts))
 
 
 class HashEmbedder:
@@ -120,6 +134,10 @@ class HashEmbedder:
             return []
         async with _embedding_semaphore():
             return await anyio.to_thread.run_sync(self._embed_sync, list(texts))
+
+    async def embed_query(self, texts: Sequence[str]) -> list[list[float]]:
+        """Embed queries; the hash fallback has no query/document asymmetry."""
+        return await self.embed(texts)
 
 
 @dataclass(frozen=True)
