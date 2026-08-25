@@ -1,0 +1,13 @@
+{
+  "a": 0.5735792838988321,
+  "b": -4.849528428838639,
+  "fit_set_sha256": "52278766f27bd7bc78726da5b4a1afb6e2858e8a159abb9f0fca63dfe0275a21",
+  "fit_size": 300,
+  "fitted_at": "2026-10-23",
+  "mean_balanced_accuracy": 0.9203703703703704,
+  "negatives": 270,
+  "positives": 30,
+  "provenance": "provisional-self-retrieval-v1: machine-generated queries from local corpus sentences, hard negatives by reranker score; R5 refits on human gold",
+  "reranker": "fastembed:Xenova/ms-marco-MiniLM-L-6-v2",
+  "threshold": 0.2552458157056597
+}

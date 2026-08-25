@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import json
 import sys
 from pathlib import Path
 
+from docqa.answer import CalibrationUnavailable
 from docqa.config import Settings, get_settings
 from docqa.db import upgrade_to_head
 from docqa.ingest.chunking import TokenCapViolation
@@ -19,6 +21,8 @@ EXIT_OK = 0
 EXIT_ERROR = 1
 EXIT_LOCK = 2
 EXIT_CAP = 3
+EXIT_CALIBRATION = 4
+EXIT_PROBE_REWRITTEN = 5
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -50,6 +54,30 @@ def _parser() -> argparse.ArgumentParser:
     verify.add_argument(
         "pdf", nargs="*", type=Path, help="files to verify (default: every locked file)"
     )
+
+    serve = sub.add_parser("serve", help="run the answer API")
+    serve.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1)")
+    serve.add_argument("--port", type=int, default=8100, help="port (default 8100)")
+    serve.add_argument(
+        "--calibration", type=Path, default=None, help="override eval/calibration.json"
+    )
+    serve.add_argument(
+        "--uncalibrated",
+        action="store_true",
+        help="boot without eval/calibration.json; recorded in every response",
+    )
+    serve.add_argument(
+        "--structured-output",
+        choices=["tool", "json"],
+        default=None,
+        help="override DOCQA_STRUCTURED_OUTPUT",
+    )
+
+    probe = sub.add_parser(
+        "probe-tool-choice",
+        help="check whether the configured gateway honours a forced tool call",
+    )
+    probe.add_argument("--json", action="store_true", help="print the verdict as JSON")
     return parser
 
 
@@ -109,6 +137,58 @@ def _verify_all(settings: Settings, paths: list[Path]) -> None:
         print(f"OK {path.name}")
 
 
+def _run_serve(args: argparse.Namespace, settings: Settings) -> int:
+    import uvicorn
+
+    from docqa.api import create_app
+
+    if args.structured_output is not None:
+        settings = dataclasses.replace(
+            settings, structured_output=args.structured_output
+        )
+    app = create_app(
+        settings=settings,
+        calibration_path=args.calibration,
+        allow_uncalibrated=args.uncalibrated,
+    )
+    uvicorn.run(app, host=args.host, port=args.port)
+    return EXIT_OK
+
+
+def _run_probe(args: argparse.Namespace, settings: Settings) -> int:
+    from docqa.answer import (
+        OpenAICompatibleModel,
+        probe_local_client,
+        probe_tool_choice,
+    )
+
+    if settings.model_base_url is not None:
+        model = OpenAICompatibleModel(
+            settings.model_base_url,
+            settings.model_name,
+            structured_output="tool",
+            api_key=settings.model_api_key,
+            timeout_s=settings.model_timeout_s,
+        )
+        verdict = asyncio.run(probe_tool_choice(model))
+    else:
+        verdict = asyncio.run(probe_local_client())
+    record = {
+        **dataclasses.asdict(verdict),
+        "honoured": verdict.honoured,
+    }
+    if args.json:
+        print(json.dumps(record, indent=2, sort_keys=True))
+    else:
+        print(f"endpoint: {verdict.endpoint}")
+        print(f"request made: {verdict.made_request}")
+        print(f"tool_choice sent: {verdict.tool_choice_sent}")
+        print(f"submit_answer returned: {verdict.tool_call_returned}")
+        print(f"verdict: {verdict.honoured}")
+        print(f"detail: {verdict.detail}")
+    return EXIT_OK if verdict.honoured is not False else EXIT_PROBE_REWRITTEN
+
+
 def _run_ingest(args: argparse.Namespace, settings: Settings) -> int:
     paths: list[Path] = list(args.pdf)
     _verify_inputs(settings, paths)
@@ -137,6 +217,13 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "verify":
             _verify_all(settings, list(args.pdf))
             return EXIT_OK
+        if args.command == "serve":
+            return _run_serve(args, settings)
+        if args.command == "probe-tool-choice":
+            return _run_probe(args, settings)
+    except CalibrationUnavailable as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return EXIT_CALIBRATION
     except LockMismatch as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_LOCK

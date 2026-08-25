@@ -101,3 +101,97 @@ uv run ruff check src tests scripts
 uv run mypy --strict src scripts/ablation.py
 uv run python scripts/ablation.py
 ```
+
+## Answer generation and structured output (R3)
+
+The answer path reads its endpoint only from the environment. No key is
+committed; `.env` is gitignored.
+
+| variable | default | meaning |
+|---|---|---|
+| `DOCQA_MODEL_BASE_URL` | unset | OpenAI-compatible base URL (for example `https://gateway.example/v1`); unset ⇒ extractive fallback |
+| `DOCQA_MODEL_API_KEY` | unset | bearer token; optional for keyless local gateways |
+| `DOCQA_MODEL_NAME` | `claude-sonnet-5-5` | model id sent in the request body |
+| `DOCQA_MODEL_TIMEOUT_S` | `60` | per-request HTTP timeout |
+| `DOCQA_STRUCTURED_OUTPUT` | `tool` | `tool` = forced `submit_answer`; `json` = JSON-only prompt + `json-repair` |
+| `DOCQA_CALIBRATION` | `eval/calibration.json` | refusal calibration artifact |
+
+**This build used the extractive fallback.** No model endpoint was configured,
+so `build_model` returned `extractive fallback (no model key)`. It selects
+verbatim sentences that overlap the question, emits the normal answer payload,
+and passes the same server-side citation validation. Every response labels it
+(`model`, `structured_output: "extractive"`). It is deterministic, not a
+language model, and is not evidence about generation quality.
+
+### `tool_choice` probe verdict
+
+`uv run docqa probe-tool-choice --json` was run on 2026-10-23. No hosted gateway
+or key exists on this machine, so the probe started its own loopback
+OpenAI-compatible stub and made a real HTTP request to it:
+
+```json
+{
+  "detail": "client transmitted tool_choice and parsed a submit_answer call over real HTTP; no hosted gateway is configured, so the gateway itself is unverified",
+  "endpoint": "local loopback stub",
+  "honoured": true,
+  "made_request": true,
+  "tool_call_returned": true,
+  "tool_choice_sent": true
+}
+```
+
+Interpretation: the client puts `tool_choice={"type":"function","function":
+{"name":"submit_answer"}}` on the wire and parses the returned tool call. **The
+hosted gateway's `tool_choice` behaviour is unverified** — no endpoint was
+contacted, and the "honoured: true" above describes the stub, not a proxy. If a
+gateway is configured later, rerun the probe; exit code `5` means the gateway
+rewrote the request and the deployment must use
+`DOCQA_STRUCTURED_OUTPUT=json`. See `docs/adr/0004-structured-output.md`.
+
+## Refusal calibration (R3)
+
+`eval/calibration.json` holds `{a, b, threshold, fit_set_sha256}`. The threshold
+is not typed by hand: `scripts/fit_calibration.py` fits a Platt scaling
+`p = sigmoid(a * score + b)` by ridge-regularised Newton-Raphson and picks the
+balanced-accuracy-optimal threshold. Commit `eval/calibration_fit_set.json` along
+with it; the loader checks only the hash's shape at boot, and
+`tests/test_refusal.py` recomputes the hash from the fit set.
+
+Current fit (2026-10-23): 300 pairs (30 positive, 270 negative) from 30
+machine-generated queries over the local 260-chunk corpus, hard negatives chosen
+by reranker score, real `Xenova/ms-marco-MiniLM-L-6-v2`:
+
+```
+a = 0.573579
+b = -4.849528
+threshold = 0.255246
+fit_set_sha256 = 52278766f27bd7bc78726da5b4a1afb6e2858e8a159abb9f0fca63dfe0275a21
+mean balanced accuracy = 0.920
+```
+
+This is **provisional self-retrieval calibration**, recorded in the artifact's
+`provenance` field. R5 must refit on the 100-question human-labelled gold set
+(`uv run python scripts/fit_calibration.py` will need a gold-pair mode).
+A score threshold fitted to the cross-encoder's logit scale is not meaningful
+for `dummy:lexical-overlap`; do not run the R3 answer path with the dummy
+reranker and this artifact.
+
+The loader refuses to start when the file is missing:
+
+```
+REFUSED: no calibration file at ...; run scripts/fit_calibration.py or pass
+--uncalibrated (recorded in every response)
+```
+
+`docqa serve --uncalibrated` boots without a score threshold (citation
+validation still applies) and sets `"uncalibrated": true` plus
+`"calibration": {"threshold": null, ...}` in every response.
+
+## Commands added in R3
+
+```sh
+uv run docqa serve --port 8100          # POST /ask and GET /health
+uv run docqa serve --uncalibrated       # explicit, recorded in responses
+uv run docqa probe-tool-choice --json   # real request; gateway verdict
+uv run python scripts/fit_calibration.py
+```
