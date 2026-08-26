@@ -47,6 +47,24 @@ panel 7.03:1, and panel-coloured text on navy 7.97:1. The paper page is the
 only warm surface against the cool shell; its own 1 px rule keeps the page
 edge legible without a shadow.
 
+Source and trail type (2026-10-24): source titles are 13 px ink, page labels
+11 px mono muted, snippets 12 px muted, and the trail summary 12.5 px muted.
+A selected source row sits on the 14% navy highlight, which composites to
+`#e2e6ef` over the panel.
+
+| pair | ratio | requirement | result |
+|---|---:|---:|---|
+| source title: ink `#15181d` on panel `#ffffff` | 17.79:1 | >= 4.5:1 | pass |
+| page label: muted `#5c6370` on panel `#ffffff` | 6.05:1 | >= 4.5:1 | pass |
+| snippet: muted `#5c6370` on panel `#ffffff` | 6.05:1 | >= 4.5:1 | pass |
+| trail summary: muted `#5c6370` on panel `#ffffff` | 6.05:1 | >= 4.5:1 | pass |
+| selected row: muted `#5c6370` on highlight `#e2e6ef` | 4.84:1 | >= 4.5:1 | pass |
+
+Citation-mark placement was measured in Chromium at 1440x900 and 390x844:
+0 of the 3 `sup` marks had a left edge within 2 px of its claim paragraph's
+left edge, and the answer pane at 1440x900 measured `scrollHeight` 844 px
+against `clientHeight` 844 px (no scroll).
+
 ## Embedding path used: real model
 
 **This run used the real bge-small-en-v1.5 weights, not dummy embeddings.**
