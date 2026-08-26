@@ -158,7 +158,7 @@ function Sources({
                     <span aria-hidden="true">·</span>
                     <span>Page {citation.page_no}</span>
                   </span>
-                  <span className="source-quote">
+                  <span className="source-quote" title={citation.quote}>
                     {formatQuoted(citation.quote)}
                   </span>
                 </span>
