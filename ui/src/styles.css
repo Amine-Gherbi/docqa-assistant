@@ -1,22 +1,22 @@
 /*
- * Marginalia — the reading room.
- * A dark room, one lit paper page, amber marking where a sentence came from.
+ * Marginalia — the daylight reading room.
+ * Cool paper around a warm page, navy marking where a sentence came from.
  * Palette: page, panel, panel-raised, ink, muted, rule, accent, highlight, paper.
  * Geometry: square corners, 1 px rules, dense 32 px rows, no shadows.
  */
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   accent-color: var(--accent);
-  --page: #16181a;
-  --panel: #1d2024;
-  --panel-raised: #242830;
-  --ink: #e9e5dc;
-  --muted: #a09a8e;
-  --rule: #2c3136;
-  --accent: #d9a441;
-  --highlight: rgba(217, 164, 65, 0.22);
-  --paper: #f7f4ec;
+  --page: #f6f7f9;
+  --panel: #ffffff;
+  --panel-raised: #eef1f5;
+  --ink: #15181d;
+  --muted: #5c6370;
+  --rule: #dfe3e9;
+  --accent: #2f4f8f;
+  --highlight: rgba(47, 79, 143, 0.14);
+  --paper: #fffdf8;
   --ui: Inter, "Segoe UI", system-ui, sans-serif;
   --document: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
   --mono: SFMono-Regular, Consolas, "Liberation Mono", monospace;
@@ -89,7 +89,7 @@ button:disabled {
 
 code {
   padding: 1px 4px;
-  background: var(--panel);
+  background: var(--panel-raised);
   font-family: var(--mono);
   font-size: 0.9em;
 }
@@ -228,6 +228,7 @@ code {
   padding: 14px 18px 24px;
   overflow-y: auto;
   border-left: 1px solid var(--rule);
+  background: var(--panel);
 }
 
 .eyebrow {
@@ -312,7 +313,7 @@ code {
   padding: 0 14px;
   border: 1px solid var(--accent);
   background: var(--accent);
-  color: var(--page);
+  color: var(--panel);
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 600;
@@ -327,7 +328,7 @@ code {
 .primary:hover:not(:disabled) {
   border-color: var(--ink);
   background: var(--ink);
-  color: var(--page);
+  color: var(--panel);
 }
 
 .primary:disabled {
@@ -599,7 +600,7 @@ code {
 }
 
 .source-row:hover {
-  background: var(--panel);
+  background: var(--page);
 }
 
 .source-row.selected {
@@ -698,7 +699,7 @@ code {
   padding: 14px;
   border: 1px solid var(--rule);
   border-left: 2px solid var(--accent);
-  background: var(--panel);
+  background: var(--page);
 }
 
 .refusal h3 {
@@ -809,7 +810,7 @@ code {
 
 .pdf-page canvas {
   display: block;
-  /* Keep the PDF light, but let the paper tint show through the white page. */
+  /* Keep the PDF light, but let the warm paper tint show through the page. */
   mix-blend-mode: multiply;
 }
 
@@ -892,7 +893,7 @@ code {
   width: 20px;
   height: 20px;
   background: var(--accent);
-  color: var(--page);
+  color: var(--panel);
   font-family: var(--mono);
   font-size: 10px;
   font-weight: 600;

@@ -16,32 +16,36 @@ Recorded 2026-10-23 on the build machine. No Docker and no hosted service.
 | Reranking | fastembed `Xenova/ms-marco-MiniLM-L-6-v2` (Apache-2.0), ONNX Runtime, CPU |
 | Answer API | `uv run docqa serve` on `127.0.0.1:8788` (CLI default); `GET /health`, `POST /ask`, `GET /eval/report` |
 | UI | `npm --prefix ui run dev` on `http://127.0.0.1:5173`; Vite proxies `/api` to `127.0.0.1:8788` |
-| Screenshots | four 2880x1800 WebP files captured at 1440x900 CSS px with deviceScaleFactor 2, re-captured 2026-10-24 in the reading-room theme |
-| UI theme | "reading room": dark page `#16181a`, cream ink `#e9e5dc`, amber citations `#d9a441`, paper document `#f7f4ec` |
+| Screenshots | four 2880x1800 WebP files captured at 1440x900 CSS px with deviceScaleFactor 2, re-captured 2026-10-24 before the daylight theme; not yet re-captured for it |
+| UI theme | "daylight reading room": cool page `#f6f7f9`, white panels, navy citations `#2f4f8f`, warm paper document `#fffdf8` |
 | UI tests | `npm --prefix ui run e2e`: 4 Playwright tests pass — all three citations scroll and highlight, every recorded claim resolves with no render miss; `node ui/scripts/verify_demo_paper.mjs`: 9/9 demo claims resolve against the committed PDF, recorded 2026-10-23 |
 | Judge model | `claude-opus-5-5` pinned in `eval/judge.yaml`, different from the generator; reliability unverified |
 
-## Reading-room palette and contrast (2026-10-24)
+## Daylight reading-room palette and contrast (2026-10-24)
 
-The Marginalia UI uses the dark "reading room" identity: page `#16181a`, panel
-`#1d2024`, raised panel `#242830`, cream ink `#e9e5dc`, muted `#a09a8e`, rule
-`#2c3136`, amber accent `#d9a441`, highlight `rgba(217, 164, 65, 0.22)`, and
-paper `#f7f4ec`. The PDF page stays light and is never inverted; the paper tint
-is applied with `mix-blend-mode: multiply`, not by filtering the document.
+The Marginalia UI uses the light "daylight reading room" identity: page
+`#f6f7f9`, panel `#ffffff`, raised panel `#eef1f5`, ink `#15181d`, muted
+`#5c6370`, rule `#dfe3e9`, navy accent `#2f4f8f`, highlight
+`rgba(47, 79, 143, 0.14)`, and warm paper `#fffdf8`. The PDF page is never
+inverted or filtered; the paper tint is applied with
+`mix-blend-mode: multiply`, not by altering the document itself.
 
 Ratios are computed with the WCAG 2.x relative-luminance formula,
 `(L_lighter + 0.05) / (L_darker + 0.05)`, not estimated:
 
 | pair | ratio | requirement | result |
 |---|---:|---:|---|
-| cream `#e9e5dc` on page `#16181a` | 14.16:1 | >= 7:1 | pass |
-| muted `#a09a8e` on panel `#1d2024` | 5.85:1 | >= 4.5:1 | pass |
-| amber `#d9a441` on page `#16181a` (text) | 7.91:1 | >= 4.5:1 | pass |
-| amber `#d9a441` on page `#16181a` (UI) | 7.91:1 | >= 3:1 | pass |
-| paper `#f7f4ec` on page `#16181a` | 16.20:1 | paper reads as the lit object | pass |
+| ink `#15181d` on page `#f6f7f9` | 16.60:1 | >= 7:1 | pass |
+| muted `#5c6370` on panel `#ffffff` | 6.05:1 | >= 4.5:1 | pass |
+| navy `#2f4f8f` on page `#f6f7f9` (text) | 7.43:1 | >= 4.5:1 | pass |
+| navy `#2f4f8f` on page `#f6f7f9` (UI) | 7.43:1 | >= 3:1 | pass |
+| paper `#fffdf8` on page `#f6f7f9` | 1.05:1 | visible 1 px rule | pass: rule `#dfe3e9` on page is 1.20:1 |
 
-Supporting pairs in the same theme: cream on panel 13.01:1, muted on page
-6.36:1, amber on panel 7.27:1, and page-coloured text on amber 7.91:1.
+Supporting pairs in the same theme: ink on panel 17.79:1, muted on page
+5.64:1, muted on raised panel 5.34:1, navy on panel 7.97:1, navy on raised
+panel 7.03:1, and panel-coloured text on navy 7.97:1. The paper page is the
+only warm surface against the cool shell; its own 1 px rule keeps the page
+edge legible without a shadow.
 
 ## Embedding path used: real model
 
