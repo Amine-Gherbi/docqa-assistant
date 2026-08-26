@@ -17,9 +17,10 @@ structure and the citation gate would have nothing to validate.
 
 The project has no model credential and must not commit one. The endpoint is
 therefore read from `DOCQA_MODEL_BASE_URL`, `DOCQA_MODEL_API_KEY`, and
-`DOCQA_MODEL_NAME`. Until an endpoint is configured, the answer path runs a
-deterministic extractive fallback that still emits the same payload shape, so
-the citation gate is exercised end to end without a model.
+`DOCQA_MODEL_NAME`. The measured demo uses a public, keyless OpenAI-compatible
+endpoint (`scripts/live.sh`, no secret); when no endpoint is configured, the
+answer path runs a deterministic extractive fallback that still emits the same
+payload shape, so the citation gate is exercised end to end without a model.
 
 ## Decision
 
@@ -28,12 +29,12 @@ the citation gate is exercised end to end without a model.
    `tool_choice={"type":"function","function":{"name":"submit_answer"}}`.
    Generation is not streamed. The response must contain a `submit_answer` call
    whose arguments parse as JSON; `json-repair` is applied before giving up.
-2. **Probe before trusting the gateway.** `uv run docqa probe-tool-choice`
-   sends a real HTTP request that forces `submit_answer` and reports whether a
-   tool call came back. It exits `0` when the call was honoured, `5` when the
-   gateway returned content instead, and `1` on a transport failure. The verdict
-   is recorded in `docs/ENV.md`. A CI job must run it before any eval that
-   assumes tool mode.
+2. **Probe before trusting the gateway.** `uv run docqa probe` sends a real HTTP
+   request that forces `submit_answer` and reports whether a tool call came
+   back. It exits `0` when the call was honoured, `5` when the gateway returned
+   content instead, and `1` on a transport failure. The verdict is written to
+   `eval/structured-output.json` and recorded in `docs/ENV.md`. A CI job must
+   run it before any eval that assumes tool mode.
 3. **Documented fallback: JSON-only prompt + repair.** Setting
    `DOCQA_STRUCTURED_OUTPUT=json` (or `docqa serve --structured-output json`)
    removes `tools` and `tool_choice`, appends an instruction to return one JSON
@@ -47,19 +48,22 @@ the citation gate is exercised end to end without a model.
 
 ## Verification status (2026-10-23)
 
-No hosted gateway or API key was available on the build machine. The probe was
-executed against a **local loopback OpenAI-compatible stub** started by the
-probe itself. The request crossed real HTTP, the stub recorded the outgoing
-`tool_choice`, and the client parsed the returned `submit_answer` call. The
-recorded verdict is therefore:
+The probe was first exercised against a local loopback stub, then against the
+**live keyless gateway** `https://text.pollinations.ai/openai` with model
+`openai-fast`. That request carried
+`tool_choice={"type":"function","function":{"name":"submit_answer"}}` and the
+gateway returned a `submit_answer` tool call; the verdict is
+`eval/structured-output.json` (`mode: "tool"`, `tool_call_returned: true`,
+6.28 s). The recorded verdict is therefore:
 
-- client serialisation and response parsing: **verified**;
-- hosted gateway behaviour: **unverified** — no endpoint was contacted.
-
-The production default remains `tool`, and `docs/ENV.md` states the limitation.
-When a gateway is available, run `uv run docqa probe-tool-choice --json`; if it
-exits `5`, deploy with `DOCQA_STRUCTURED_OUTPUT=json` and update the verdict in
-`docs/ENV.md` and this ADR.
+- client serialisation, forced `tool_choice`, and response parsing:
+  **verified** against a real gateway;
+- JSON fallback: **verified against the loopback stub and unit tests**, not
+  needed against this gateway (tool mode was honoured, so JSON mode was not
+  probed);
+- a gateway that rewrites `tool_choice`: **not observed here**. The probe is the
+  control for that case; if it exits `5`, deploy with
+  `DOCQA_STRUCTURED_OUTPUT=json`, and update `docs/ENV.md` and this ADR.
 
 ## Consequences
 
@@ -69,7 +73,11 @@ exits `5`, deploy with `DOCQA_STRUCTURED_OUTPUT=json` and update the verdict in
   validation guarantee with the tool path.
 - The answer schema is duplicated in the prompt and in `_ANSWER_SCHEMA`; both
   must change together.
-- Without a model key, answers come from the labelled deterministic extractive
-  fallback. It is not a language model and must not be presented as one; every
-  response says `"model": "extractive fallback (no model key)"` and
-  `"structured_output": "extractive"`.
+- When `DOCQA_MODEL_BASE_URL` is unset, answers come from the labelled
+  deterministic extractive fallback. It is not a language model and must not be
+  presented as one; every response says
+  `"model": "extractive fallback (no model key)"` and
+  `"structured_output": "extractive"`. When a live endpoint is configured,
+  there is no silent fallback to it: a 429 after two retries surfaces as
+  `RateLimitedError` (HTTP 429), and other failures as `model_unavailable`
+  (HTTP 502).

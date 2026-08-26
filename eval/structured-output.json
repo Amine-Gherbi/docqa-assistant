@@ -1,0 +1,11 @@
+{
+  "checked_at": "2026-10-23T18:39:11.034080+00:00",
+  "detail": "gateway returned the forced submit_answer call",
+  "endpoint": "https://text.pollinations.ai/openai",
+  "json_mode_ok": null,
+  "mode": "tool",
+  "model": "openai-fast",
+  "tool_call_returned": true,
+  "tool_choice_sent": true,
+  "wall_clock_s": 0.922
+}

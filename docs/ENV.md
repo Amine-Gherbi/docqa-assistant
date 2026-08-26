@@ -102,84 +102,155 @@ uv run mypy --strict src scripts/ablation.py
 uv run python scripts/ablation.py
 ```
 
-## Answer generation and structured output (R3)
+## Answer generation and structured output (R3, live endpoint)
 
-The answer path reads its endpoint only from the environment. No key is
-committed; `.env` is gitignored.
+Recorded 2026-10-23. The answer path reads its endpoint only from the
+environment. No key is committed; `.env` is gitignored.
 
 | variable | default | meaning |
 |---|---|---|
-| `DOCQA_MODEL_BASE_URL` | unset | OpenAI-compatible base URL (for example `https://gateway.example/v1`); unset ⇒ extractive fallback |
-| `DOCQA_MODEL_API_KEY` | unset | bearer token; optional for keyless local gateways |
+| `DOCQA_MODEL_BASE_URL` | unset | OpenAI-compatible base URL; unset ⇒ extractive fallback |
+| `DOCQA_MODEL_API_KEY` | unset | bearer token; empty for the keyless endpoint |
 | `DOCQA_MODEL_NAME` | `claude-sonnet-5-5` | model id sent in the request body |
 | `DOCQA_MODEL_TIMEOUT_S` | `60` | per-request HTTP timeout |
-| `DOCQA_STRUCTURED_OUTPUT` | `tool` | `tool` = forced `submit_answer`; `json` = JSON-only prompt + `json-repair` |
+| `DOCQA_MODEL_MIN_INTERVAL_S` | `31` | minimum seconds between request **starts** to one endpoint (one call in flight) |
+| `DOCQA_MODEL_MAX_RETRIES` | `2` | retries after HTTP 429 before `RateLimitedError` |
+| `DOCQA_MODEL_RETRY_BACKOFF_S` | `5` | base backoff; retries wait 5 s then 10 s (or `Retry-After`, if larger) |
+| `DOCQA_STRUCTURED_OUTPUT` | `auto` | `auto` = read the probe artifact; `tool`/`json` force a mode |
+| `DOCQA_STRUCTURED_OUTPUT_PROBE` | `eval/structured-output.json` | recorded probe artifact |
+| `DOCQA_DEMO_ANSWERS` | `data/demo-answers.json` | precomputed demo answers |
 | `DOCQA_CALIBRATION` | `eval/calibration.json` | refusal calibration artifact |
+| `DOCQA_FORCE_GENERATION` | `0` | **diagnostic only**: when `1`/`true`, `docqa eval`, `ask` and `warm` skip the calibrated low-score refusal so the model's own answer rate is measurable. Citation validation still runs. The API ignores it, and a forced eval is written to `eval-report-forced.json` with `gate_run: false` and exits 0 |
 
-**This build used the extractive fallback.** No model endpoint was configured,
-so `build_model` returned `extractive fallback (no model key)`. It selects
-verbatim sentences that overlap the question, emits the normal answer payload,
-and passes the same server-side citation validation. Every response labels it
-(`model`, `structured_output: "extractive"`). It is deterministic, not a
-language model, and is not evidence about generation quality.
+### Free endpoint used
 
-### `tool_choice` probe verdict
+| field | value |
+|---|---|
+| base URL | `https://text.pollinations.ai/openai` |
+| model id | `openai-fast` (the response reports `gpt-oss-20b`) |
+| auth | none; `DOCQA_MODEL_API_KEY` is empty |
+| limit | anonymous tier: about one answer per 30 s per IP |
+| measured 2026-10-23 | probe 0.782 s (re-run; first probe 6.28 s); 30-question production eval 778.6 s (26 requests, 0 retries, 0 rate limits); forced diagnostic 916.4 s (30 requests) |
+| demo cache | `data/demo-answers.json`, six entries generated 2026-10-23T17:29:10Z |
 
-`uv run docqa probe-tool-choice --json` was run on 2026-10-23. No hosted gateway
-or key exists on this machine, so the probe started its own loopback
-OpenAI-compatible stub and made a real HTTP request to it:
+The client serialises every call and spaces request starts by at least 31 s.
+A 429 is retried twice with 5 s / 10 s backoff; if it still fails the call
+raises `RateLimitedError`, which the API returns as HTTP 429 with
+`"state": "rate_limited"` and the eval records per question. There is no silent
+fallback to the extractive model when a live endpoint is configured.
+
+`bash scripts/live.sh <command…>` exports the variables above and runs
+`uv run <command…>`; it contains no secret.
+
+### Measured run cost and demo cache
+
+The 30-question production eval on 2026-10-23 took **778.6 s (12.98 min)** and
+made **26 model requests** with **0 retries and 0 rate-limit failures**. That
+wall clock is almost entirely the rate floor: 25 intervals × 31 s = 775 s. The
+gold-fitted threshold admits all 24 answerable questions plus U1 and U6, so 26
+calls are now needed; the forced diagnostic made 30 calls in 916.4 s
+(29 × 31 = 899 s floor). The budget is recorded in `eval-report.json` under
+`provenance.run`, with the earlier gate run in `eval-report-baseline.json` and
+the diagnostic in `eval-report-forced.json`.
+
+`bash scripts/live.sh warm` generated `data/demo-answers.json` with the six
+demo questions. Of those, T1 and R3 are validated answers; S3, D3 and R2 are
+`validation_failed` refusals (the model's quotes failed the citation contract);
+U5 is a `low_score` refusal. Each entry carries the exact question text, the
+model id `openai-compatible:openai-fast`, and a `generated_at` timestamp. The
+cache was generated before the gold calibration refit, so each cached response
+embeds the then-current calibration snapshot (threshold `0.2552`); that is
+historical metadata, not the threshold now loaded at boot. The API serves an
+exact-question hit with `cached: true` and
+`cache: {model, generated_at}`, and a miss calls the live endpoint, returning
+HTTP 429 `{"state": "rate_limited", …}` when the anonymous window is closed
+rather than a 500.
+
+### Probe verdict (real endpoint)
+
+`bash scripts/live.sh probe --json` was re-run on 2026-10-23T18:25:30Z
+against the live endpoint:
 
 ```json
 {
-  "detail": "client transmitted tool_choice and parsed a submit_answer call over real HTTP; no hosted gateway is configured, so the gateway itself is unverified",
-  "endpoint": "local loopback stub",
-  "honoured": true,
-  "made_request": true,
+  "checked_at": "2026-10-23T18:25:30.639502+00:00",
+  "detail": "gateway returned the forced submit_answer call",
+  "endpoint": "https://text.pollinations.ai/openai",
+  "json_mode_ok": null,
+  "mode": "tool",
+  "model": "openai-fast",
   "tool_call_returned": true,
-  "tool_choice_sent": true
+  "tool_choice_sent": true,
+  "wall_clock_s": 0.782
 }
 ```
 
-Interpretation: the client puts `tool_choice={"type":"function","function":
-{"name":"submit_answer"}}` on the wire and parses the returned tool call. **The
-hosted gateway's `tool_choice` behaviour is unverified** — no endpoint was
-contacted, and the "honoured: true" above describes the stub, not a proxy. If a
-gateway is configured later, rerun the probe; exit code `5` means the gateway
-rewrote the request and the deployment must use
-`DOCQA_STRUCTURED_OUTPUT=json`. See `docs/adr/0004-structured-output.md`.
+The gateway honours the forced `submit_answer` call, so the recorded mode is
+`tool`; JSON mode is not probed when tool mode already works. The artifact is
+`eval/structured-output.json`, and `get_settings()` reads it only when
+`DOCQA_STRUCTURED_OUTPUT=auto` and the artifact names the same endpoint and
+model. A forced `tool`/`json` value in the environment always wins. If a future
+endpoint ignores `tool_choice`, `docqa probe` tries JSON with a second real
+request, records `mode: "json"`, and exits `5`. See
+`docs/adr/0004-structured-output.md`.
+
+### Live answer check
+
+`bash scripts/live.sh ask --question "How many identical layers are in the Transformer encoder stack?"`
+returned a validated answer on 2026-10-23, re-run at 18:25 UTC with the
+gold-fitted threshold `0.6361`:
+
+```
+Model: openai-compatible:openai-fast (tool)
+Calibration: threshold=0.6360770752477083 uncalibrated=False
+Result: answered with 1 validated claim(s)
+Claim 1: The Transformer encoder stack contains 6 identical layers.
+  citation: attention-is-all-you-need p3 chars 24-1905
+            sha256=fa1c282a95102f92170c170b3da828911442465996b6ce6635ffe25e7998b35d
+            quote='Encoder:  The encoder is composed of a stack of N = 6 identical layers.'
+Validation: returned=1 kept=1 dropped=0 schema_failures=0
+```
+
+The extractive fallback still exists and is used only when
+`DOCQA_MODEL_BASE_URL` is unset; it is labelled `structured_output:
+"extractive"` everywhere.
 
 ## Refusal calibration (R3)
 
 `eval/calibration.json` holds `{a, b, threshold, fit_set_sha256}`. The threshold
-is not typed by hand: `scripts/fit_calibration.py` fits a Platt scaling
-`p = sigmoid(a * score + b)` by ridge-regularised Newton-Raphson and picks the
-balanced-accuracy-optimal threshold. Commit `eval/calibration_fit_set.json` along
-with it; the loader checks only the hash's shape at boot, and
-`tests/test_refusal.py` recomputes the hash from the fit set.
+is not typed by hand: `scripts/fit_calibration_gold.py` fits a question-level
+Platt scaling `p = sigmoid(a * top_rerank_score + b)` by ridge-regularised
+Newton-Raphson and picks the balanced-accuracy-optimal threshold. Commit
+`eval/calibration_fit_set.json` along with it; the loader validates the hash's
+shape at boot, and `tests/test_refusal.py` recomputes it from the fit set.
 
-Current fit (2026-10-23): 300 pairs (30 positive, 270 negative) from 30
-machine-generated queries over the local 260-chunk corpus, hard negatives chosen
-by reranker score, real `Xenova/ms-marco-MiniLM-L-6-v2`:
+Current fit (2026-10-23), `gold-human-v1`: the 30 hand-authored gold questions
+(24 answerable, 6 unanswerable), one observation each, real
+`Xenova/ms-marco-MiniLM-L-6-v2`:
 
 ```
-a = 0.573579
-b = -4.849528
-threshold = 0.255246
-fit_set_sha256 = 52278766f27bd7bc78726da5b4a1afb6e2858e8a159abb9f0fca63dfe0275a21
-mean balanced accuracy = 0.920
+a = 0.337571
+b = 0.677505
+threshold = 0.636077
+fit_set_sha256 = f1a55cddcad2154aa67df9265f412d9e27b44e21fd42aac292158cd1cc580479
+in-sample balanced accuracy = 0.833 (TPR 1.000, TNR 0.667)
+held-out odd→even = 0.833, even→odd = 0.833 (3 negatives per fold)
 ```
 
-This is **provisional self-retrieval calibration**, recorded in the artifact's
-`provenance` field. R5 must refit on the 100-question human-labelled gold set
-(`uv run python scripts/fit_calibration.py` will need a gold-pair mode).
-A score threshold fitted to the cross-encoder's logit scale is not meaningful
-for `dummy:lexical-overlap`; do not run the R3 answer path with the dummy
-reranker and this artifact.
+The committed fit is **in-sample**: the fit set is the same 30 questions the
+eval runs, so the 0.833 in-sample figure is optimistic and run (c) is not a
+clean held-out test. The odd/even id-parity folds are the out-of-sample
+evidence, and `eval/calibration.json` records both directions under `held_out`.
+The equivalent raw-score cut is ≈ −0.353. A threshold fitted to the
+cross-encoder's logit scale is not meaningful for `dummy:lexical-overlap`; do
+not run the answer path with the dummy reranker and this artifact. The
+provisional synthetic fitter, `scripts/fit_calibration.py`, is kept for
+comparison but overwrites this artifact if run.
 
 The loader refuses to start when the file is missing:
 
 ```
-REFUSED: no calibration file at ...; run scripts/fit_calibration.py or pass
+REFUSED: no calibration file at ...; run scripts/fit_calibration_gold.py or pass
 --uncalibrated (recorded in every response)
 ```
 
@@ -190,10 +261,16 @@ validation still applies) and sets `"uncalibrated": true` plus
 ## Commands added in R3
 
 ```sh
-uv run docqa serve --port 8100          # POST /ask and GET /health
-uv run docqa serve --uncalibrated       # explicit, recorded in responses
-uv run docqa probe-tool-choice --json   # real request; gateway verdict
-uv run python scripts/fit_calibration.py
+bash scripts/live.sh probe --json   # real request; records the mode
+bash scripts/live.sh ask --question "…"
+bash scripts/live.sh warm           # six demo answers → data/demo-answers.json
+bash scripts/live.sh eval           # 30 questions; 778.6 s measured; ~31 s between calls
+bash scripts/live.sh eval --force-generation  # diagnostic: bypass low_score, exit 0
+
+uv run docqa serve --port 8100            # POST /ask and GET /health
+uv run docqa serve --uncalibrated         # explicit, recorded in responses
+uv run python scripts/fit_calibration_gold.py   # refit on the human gold set (local DB)
+uv run python scripts/fit_calibration.py        # provisional synthetic fit; overwrites the artifact
 ```
 
 ## k6 concurrency budget on this host

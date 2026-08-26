@@ -5,14 +5,14 @@ score ``s`` plus the balanced-accuracy-optimal threshold. Nothing in the output
 is typed by hand: ``a`` and ``b`` come from Newton's method on the labelled
 samples, and the threshold maximises ``TPR + TNR`` over the observed scores.
 
-Provenance matters. Until R5 supplies human-labelled gold questions, the pairs
-are machine-generated: each query is a sentence from a real chunk in the local
-corpus (positive) against other chunks from the same corpus (negatives, of which
-the nine highest-scoring are kept as hard negatives). This fit is **optimistic**
-for real question phrasing: the live smoke test reports top-1 reranker scores of
-2.4-6.8 for answerable questions, below the sentence-derived threshold. The
-artifact records its provenance and fit-set hash, and R5 must refit on the
-100-question gold set rather than treating this threshold as an eval result.
+Provenance matters. This is the **provisional synthetic path**: each query is a
+sentence from a real chunk in the local corpus (positive) against other chunks
+from the same corpus (negatives, of which the nine highest-scoring are kept as
+hard negatives). It is kept for comparison, but it is not the production fit:
+that is ``scripts/fit_calibration_gold.py``, which calibrates the top reranked
+score on the human gold questions. Running this script overwrites
+``eval/calibration.json`` and ``eval/calibration_fit_set.json`` with the
+synthetic fit; do not run it before a gate run.
 
 Run with the real cross-encoder:
 
@@ -23,15 +23,19 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import itertools
 import json
-import math
 import re
 from dataclasses import dataclass
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from docqa.calibration_fit import (
+    Pair,
+    canonical_fit_set,
+    choose_threshold,
+    fit_platt,
+)
 from docqa.config import PROJECT_ROOT, get_settings
 from docqa.rerank import build_reranker
 
@@ -77,16 +81,6 @@ class ChunkRow:
     doc_id: str
 
 
-@dataclass(frozen=True)
-class Pair:
-    """One labelled (query, chunk) pair and its reranker score."""
-
-    query: str
-    chunk_id: int
-    label: int
-    score: float
-
-
 def _seed_indices(size: int, wanted: int) -> list[int]:
     """Evenly spread ``wanted`` indices over ``range(size)``."""
     if size <= wanted:
@@ -107,88 +101,6 @@ def _query_for(chunk: ChunkRow) -> str | None:
         if len(set(terms)) >= 5:
             return candidate
     return None
-
-
-def _sigmoid(value: float) -> float:
-    if value >= 0:
-        return 1.0 / (1.0 + math.exp(-value))
-    exponential = math.exp(value)
-    return exponential / (1.0 + exponential)
-
-
-def fit_platt(pairs: list[Pair]) -> tuple[float, float]:
-    """Fit ``p = sigmoid(a*s + b)`` by ridge-regularised Newton-Raphson.
-
-    Scores are standardised before fitting: the synthetic fit set is close to
-    separable, and unregularised Newton would drive ``a`` to infinity and make
-    every probability exactly 0 or 1. A ridge term on the standardised slope
-    keeps the sigmoid usable while still letting the data set the slope.
-    """
-    scores = [pair.score for pair in pairs]
-    mean = sum(scores) / len(scores)
-    variance = sum((score - mean) ** 2 for score in scores) / len(scores)
-    scale = math.sqrt(variance) or 1.0
-    a, b = 1.0, 0.0
-    ridge = 1.0
-    for _ in range(200):
-        grad_a = grad_b = 0.0
-        h_aa = h_ab = h_bb = 0.0
-        for pair in pairs:
-            z = (pair.score - mean) / scale
-            probability = _sigmoid(a * z + b)
-            residual = probability - pair.label
-            weight = probability * (1.0 - probability)
-            grad_a += residual * z
-            grad_b += residual
-            h_aa += weight * z * z
-            h_ab += weight * z
-            h_bb += weight
-        grad_a += ridge * a
-        h_aa += ridge
-        h_bb += ridge
-        determinant = h_aa * h_bb - h_ab * h_ab
-        if determinant == 0.0:
-            break
-        delta_a = (h_bb * grad_a - h_ab * grad_b) / determinant
-        delta_b = (h_aa * grad_b - h_ab * grad_a) / determinant
-        a -= delta_a
-        b -= delta_b
-        if abs(delta_a) < 1e-10 and abs(delta_b) < 1e-10:
-            break
-    return a / scale, b - a * mean / scale
-
-
-def balanced_accuracy(pairs: list[Pair], a: float, b: float, threshold: float) -> float:
-    """TPR + TNR, the quantity the threshold maximises."""
-    positives = [pair for pair in pairs if pair.label == 1]
-    negatives = [pair for pair in pairs if pair.label == 0]
-    if not positives or not negatives:
-        raise ValueError("calibration needs both positive and negative pairs")
-    true_positive = sum(1 for p in positives if _sigmoid(a * p.score + b) >= threshold)
-    true_negative = sum(1 for p in negatives if _sigmoid(a * p.score + b) < threshold)
-    return true_positive / len(positives) + true_negative / len(negatives)
-
-
-def choose_threshold(pairs: list[Pair], a: float, b: float) -> tuple[float, float]:
-    """Return the balanced-accuracy-optimal threshold and its score."""
-    probabilities = sorted({_sigmoid(a * pair.score + b) for pair in pairs})
-    candidates = [0.0, *probabilities, 1.0]
-    boundaries = [
-        (low + high) / 2 for low, high in itertools.pairwise(candidates)
-    ]
-    scored = [(balanced_accuracy(pairs, a, b, value), value) for value in boundaries]
-    # Highest accuracy; on a tie prefer the tighter (higher) threshold.
-    accuracy, threshold = max(scored, key=lambda item: (item[0], item[1]))
-    return threshold, accuracy / 2.0  # mean of TPR and TNR
-
-
-def canonical_fit_set(pairs: list[Pair]) -> bytes:
-    """Hashable form of the fit set: labels and identities, not model scores."""
-    rows = [
-        {"query": pair.query, "chunk_id": pair.chunk_id, "label": pair.label}
-        for pair in sorted(pairs, key=lambda pair: (pair.query, pair.chunk_id))
-    ]
-    return json.dumps(rows, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 async def _load_chunks() -> list[ChunkRow]:

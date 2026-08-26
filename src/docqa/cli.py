@@ -10,15 +10,20 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from docqa.answer import CalibrationUnavailable
-from docqa.config import Settings, get_settings
+from docqa.config import PROJECT_ROOT, Settings, get_settings
 from docqa.db import upgrade_to_head
 from docqa.eval import EvalError
 from docqa.ingest.chunking import TokenCapViolation
 from docqa.ingest.embedder import EmbedderChoice, build_embedder
 from docqa.ingest.lock import CorpusLockError, LockMismatch, load_lock, verify_file
 from docqa.ingest.pipeline import IngestResult, ingest_files
+
+if TYPE_CHECKING:
+    from docqa.answer import AnswerResponse
+    from docqa.cache import CachedAnswer
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -27,6 +32,7 @@ EXIT_CAP = 3
 EXIT_CALIBRATION = 4
 EXIT_PROBE_REWRITTEN = 5
 EXIT_JUDGE_INVALID = 7
+EXIT_RATE_LIMITED = 8
 
 JUDGE_REQUIRED = ("model", "prompt_sha256", "rubric_version", "temperature")
 
@@ -77,6 +83,66 @@ def _parser() -> argparse.ArgumentParser:
         help="override DOCQA_STRUCTURED_OUTPUT",
     )
 
+    ask = sub.add_parser("ask", help="ask one question against the ingested corpus")
+    ask.add_argument("--question", required=True, help="the exact question text")
+    ask.add_argument("--k", type=int, default=8, help="final chunks kept (default 8)")
+    ask.add_argument("--json", action="store_true", help="print the full response JSON")
+    ask.add_argument(
+        "--force-generation",
+        action="store_true",
+        help="diagnostic: bypass the low-score refusal and call the model",
+    )
+    ask.add_argument(
+        "--uncalibrated",
+        action="store_true",
+        help="boot without eval/calibration.json; recorded in the response",
+    )
+    ask.add_argument(
+        "--structured-output",
+        choices=["tool", "json"],
+        default=None,
+        help="override DOCQA_STRUCTURED_OUTPUT for this run",
+    )
+
+    warm = sub.add_parser(
+        "warm", help="precompute the six demo answers into data/demo-answers.json"
+    )
+    warm.add_argument(
+        "--questions",
+        type=Path,
+        default=PROJECT_ROOT / "data" / "demo-questions.json",
+        help="fixed demo question file",
+    )
+    warm.add_argument(
+        "--out",
+        type=Path,
+        default=None,
+        help="cache path (default: data/demo-answers.json)",
+    )
+    warm.add_argument(
+        "--force",
+        action="store_true",
+        help="regenerate every answer instead of reusing recorded ones",
+    )
+    warm.add_argument("--k", type=int, default=8, help="final chunks kept (default 8)")
+    warm.add_argument(
+        "--uncalibrated",
+        action="store_true",
+        help="boot without eval/calibration.json; recorded in every answer",
+    )
+
+    probe = sub.add_parser(
+        "probe",
+        help="probe tool_choice, fall back to JSON, and record the chosen mode",
+    )
+    probe.add_argument("--json", action="store_true", help="print the verdict as JSON")
+    probe.add_argument(
+        "--artifact",
+        type=Path,
+        default=None,
+        help="probe artifact path (default: eval/structured-output.json)",
+    )
+
     judge = sub.add_parser(
         "judge-check",
         help="validate the pinned judge protocol and report its measurement status",
@@ -111,6 +177,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     evaluate.add_argument(
         "--k", type=int, default=None, help="final chunks kept (default 8; ablation 3)"
+    )
+    evaluate.add_argument(
+        "--force-generation",
+        action="store_true",
+        help=(
+            "diagnostic: bypass the calibrated refusal for every retrievable "
+            "question; writes eval-report-forced.json and does not decide a gate"
+        ),
     )
     return parser
 
@@ -181,7 +255,9 @@ def _run_serve(args: argparse.Namespace, settings: Settings) -> int:
 
     if args.structured_output is not None:
         settings = dataclasses.replace(
-            settings, structured_output=args.structured_output
+            settings,
+            structured_output=args.structured_output,
+            structured_output_source="command line",
         )
     app = create_app(
         settings=settings,
@@ -190,6 +266,187 @@ def _run_serve(args: argparse.Namespace, settings: Settings) -> int:
     )
     uvicorn.run(app, host=args.host, port=args.port)
     return EXIT_OK
+
+
+def _print_answer(
+    question: str, response: AnswerResponse, trace_payload: dict[str, object] | None
+) -> None:
+    print(f"Question: {question}")
+    print(f"Model: {response.model} ({response.structured_output})")
+    calibration = response.calibration
+    print(
+        "Calibration: "
+        f"threshold={calibration.threshold} "
+        f"uncalibrated={calibration.uncalibrated}"
+    )
+    if response.forced_generation:
+        print("Forced generation: DIAGNOSTIC (low-score refusal bypassed)")
+    if response.insufficient_evidence:
+        print(f"Result: insufficient_evidence ({response.reason})")
+        if response.model_reason:
+            print(f"Model reason: {response.model_reason}")
+        for passage in response.passages:
+            print(
+                f"  closest: {passage.doc_id} p{passage.page_no} "
+                f"chunk {passage.chunk_id}"
+            )
+        return
+    print(f"Result: answered with {len(response.claims)} validated claim(s)")
+    for number, claim in enumerate(response.claims, start=1):
+        print(f"\nClaim {number}: {claim.text}")
+        for citation in claim.citations:
+            print(
+                f"  citation: {citation.doc_id} p{citation.page_no} "
+                f"chars {citation.char_start}-{citation.char_end}"
+            )
+            print(f"            sha256={citation.page_text_sha256}")
+            print(f"            quote={citation.quote!r}")
+    report = response.validation
+    print(
+        "\nValidation: "
+        f"returned={report.claims_returned} kept={report.claims_kept} "
+        f"dropped={report.claims_dropped} "
+        f"schema_failures={report.schema_failures}"
+    )
+    if trace_payload is not None:
+        refusal = trace_payload.get("refusal")
+        print(f"Refusal trace: {refusal}")
+
+
+def _run_ask(args: argparse.Namespace, settings: Settings) -> int:
+    from docqa.answer import load_calibration
+    from docqa.cache import trace_payload
+    from docqa.run import ProductionAnswerer
+
+    calibration = load_calibration(
+        settings.calibration_path, allow_uncalibrated=args.uncalibrated
+    )
+    answerer = ProductionAnswerer(
+        settings,
+        calibration,
+        k=args.k,
+        force_generation=args.force_generation or settings.force_generation,
+    )
+
+    async def run() -> tuple[AnswerResponse, dict[str, object]]:
+        try:
+            response, trace = await answerer.answer(args.question)
+            return response, trace_payload(trace, response, calibration)
+        finally:
+            await answerer.close()
+
+    response, trace = asyncio.run(run())
+    if args.json:
+        body = {
+            "response": _asdict(response),
+            "trace": trace,
+        }
+        print(json.dumps(body, indent=2, sort_keys=True))
+    else:
+        print(answerer.embedder_banner)
+        print(answerer.reranker_banner)
+        _print_answer(args.question, response, trace)
+    return EXIT_OK
+
+
+def _asdict(value: object) -> object:
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return dataclasses.asdict(value)
+    return value
+
+
+def _run_warm(args: argparse.Namespace, settings: Settings) -> int:
+    from docqa.answer import RateLimitedError, load_calibration
+    from docqa.cache import load_demo_questions, warm_demo_answers
+    from docqa.config import PROJECT_ROOT
+    from docqa.run import ProductionAnswerer
+
+    questions_path = args.questions or (PROJECT_ROOT / "data" / "demo-questions.json")
+    questions = load_demo_questions(questions_path)
+    out_path = args.out or settings.demo_answers_path
+    calibration = load_calibration(
+        settings.calibration_path, allow_uncalibrated=args.uncalibrated
+    )
+    answerer = ProductionAnswerer(
+        settings,
+        calibration,
+        k=args.k,
+        force_generation=settings.force_generation,
+    )
+    print(answerer.embedder_banner)
+    print(answerer.reranker_banner)
+    print(f"Model: {answerer.model.name} ({answerer.model.structured_output})")
+    print(f"Questions: {len(questions)} from {questions_path}")
+
+    def progress(position: int, total: int, entry: CachedAnswer) -> None:
+        response = entry.response
+        refused = bool(response.get("insufficient_evidence"))
+        claims_raw = response.get("claims")
+        claims = len(claims_raw) if isinstance(claims_raw, (list, tuple)) else 0
+        state = "refused" if refused else f"answered ({claims} claims)"
+        print(f"[{position}/{total}] {state}: {entry.question}")
+
+    async def run() -> None:
+        try:
+            await warm_demo_answers(
+                questions,
+                answer=answerer.answer,
+                out_path=out_path,
+                model_name=answerer.model.name,
+                calibration=calibration,
+                reuse=not args.force,
+                progress=progress,
+            )
+        finally:
+            await answerer.close()
+
+    try:
+        asyncio.run(run())
+    except RateLimitedError as exc:
+        print(f"RATE LIMITED: {exc}", file=sys.stderr)
+        print(
+            f"Partial cache kept at {out_path}; rerun `docqa warm` when the "
+            "window reopens (completed answers are reused).",
+            file=sys.stderr,
+        )
+        return EXIT_RATE_LIMITED
+    print(f"Demo answers: {out_path}")
+    return EXIT_OK
+
+
+def _run_probe_command(args: argparse.Namespace, settings: Settings) -> int:
+    from docqa.answer import ModelCallError, probe_local_client, probe_structured_output
+
+    if settings.model_base_url is None:
+        verdict = asyncio.run(probe_local_client())
+        print(f"endpoint: {verdict.endpoint}")
+        print(f"tool_choice sent: {verdict.tool_choice_sent}")
+        print(f"submit_answer returned: {verdict.tool_call_returned}")
+        print(f"detail: {verdict.detail}")
+        print(
+            "No DOCQA_MODEL_BASE_URL configured; no hosted probe artifact was "
+            "written."
+        )
+        return EXIT_OK
+    try:
+        result = asyncio.run(
+            probe_structured_output(settings, artifact_path=args.artifact)
+        )
+    except ModelCallError as exc:
+        print(f"PROBE FAILED: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    if args.json:
+        print(json.dumps(result.as_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"endpoint: {result.endpoint}")
+        print(f"model: {result.model}")
+        print(f"tool_choice sent: {result.tool_choice_sent}")
+        print(f"submit_answer returned: {result.tool_call_returned}")
+        print(f"JSON mode usable: {result.json_mode_ok}")
+        print(f"recorded mode: {result.mode}")
+        print(f"detail: {result.detail}")
+        print(f"artifact: {args.artifact or settings.structured_output_probe_path}")
+    return EXIT_OK if result.mode == "tool" else EXIT_PROBE_REWRITTEN
 
 
 def _run_probe(args: argparse.Namespace, settings: Settings) -> int:
@@ -353,6 +610,7 @@ def _run_judge_check(args: argparse.Namespace, settings: Settings) -> int:
 def _run_eval(args: argparse.Namespace, settings: Settings) -> int:
     from docqa.eval import (
         DEFAULT_ABLATION_REPORT_PATH,
+        DEFAULT_FORCED_REPORT_PATH,
         DEFAULT_GOLD_PATH,
         DEFAULT_REPORT_PATH,
         EvalConfig,
@@ -362,14 +620,25 @@ def _run_eval(args: argparse.Namespace, settings: Settings) -> int:
     )
 
     ablated = args.ablate == "vector-only"
+    force_generation = args.force_generation or settings.force_generation
     k = args.k if args.k is not None else (3 if ablated else 8)
+    if force_generation:
+        label = "diagnostic:forced-generation"
+    else:
+        label = "ablate:vector-only-top3" if ablated else "production"
     config = EvalConfig(
         mode="vector" if ablated else "hybrid_rerank",
         k=k,
-        label="ablate:vector-only-top3" if ablated else "production",
+        label=label,
         ablated=ablated,
+        force_generation=force_generation,
     )
-    out = args.out or (DEFAULT_ABLATION_REPORT_PATH if ablated else DEFAULT_REPORT_PATH)
+    if args.out is not None:
+        out = args.out
+    elif force_generation:
+        out = DEFAULT_FORCED_REPORT_PATH
+    else:
+        out = DEFAULT_ABLATION_REPORT_PATH if ablated else DEFAULT_REPORT_PATH
     report = asyncio.run(
         evaluate(
             config,
@@ -380,6 +649,13 @@ def _run_eval(args: argparse.Namespace, settings: Settings) -> int:
     write_report(report, out)
     print(render(report))
     print(f"Report: {out}")
+    if force_generation:
+        print(
+            "DIAGNOSTIC: the refusal threshold was bypassed; this is not a "
+            "production gate run, so the exit code is 0 by design.",
+            file=sys.stderr,
+        )
+        return EXIT_OK
     if not report.passed:
         print(
             f"GATE FAILURE: exit {6}; see {out}",
@@ -412,11 +688,25 @@ def main(argv: list[str] | None = None) -> int:
     """Parse arguments and dispatch."""
     args = _parser().parse_args(argv)
     settings = _override_embedder(get_settings(), getattr(args, "embedder", None))
+    if getattr(args, "structured_output", None) is not None:
+        settings = dataclasses.replace(
+            settings,
+            structured_output=args.structured_output,
+            structured_output_source="command line",
+        )
+    from docqa.answer import ModelCallError, RateLimitedError
+
     try:
         if args.command == "ingest":
             return _run_ingest(args, settings)
         if args.command == "serve":
             return _run_serve(args, settings)
+        if args.command == "ask":
+            return _run_ask(args, settings)
+        if args.command == "warm":
+            return _run_warm(args, settings)
+        if args.command == "probe":
+            return _run_probe_command(args, settings)
         if args.command == "eval":
             return _run_eval(args, settings)
         if args.command == "judge-check":
@@ -424,6 +714,12 @@ def main(argv: list[str] | None = None) -> int:
     except CalibrationUnavailable as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_CALIBRATION
+    except RateLimitedError as exc:
+        print(f"RATE LIMITED: {exc}", file=sys.stderr)
+        return EXIT_RATE_LIMITED
+    except ModelCallError as exc:
+        print(f"MODEL ERROR: {exc}", file=sys.stderr)
+        return EXIT_ERROR
     except LockMismatch as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)
         return EXIT_LOCK

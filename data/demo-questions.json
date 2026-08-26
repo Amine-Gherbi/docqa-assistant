@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "note": "Fixed demo questions. `docqa warm` records one validated answer per entry in data/demo-answers.json; the API serves exact matches only.",
+  "questions": [
+    {
+      "id": "T1",
+      "question": "How many identical layers are in the Transformer encoder stack?",
+      "kind": "answerable"
+    },
+    {
+      "id": "S3",
+      "question": "How long does Sentence-BERT take to compute 10,000 sentence embeddings?",
+      "kind": "answerable"
+    },
+    {
+      "id": "D3",
+      "question": "What batch size and how many BM25 negative passages per question did DPR use in training?",
+      "kind": "answerable"
+    },
+    {
+      "id": "R2",
+      "question": "How does the RAG-Sequence model use retrieved documents?",
+      "kind": "answerable"
+    },
+    {
+      "id": "R3",
+      "question": "How does the RAG-Token model treat the retrieved documents?",
+      "kind": "answerable"
+    },
+    {
+      "id": "U5",
+      "question": "How many layers does it use?",
+      "kind": "under_specified"
+    }
+  ]
+}
