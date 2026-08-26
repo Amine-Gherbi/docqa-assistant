@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   getDocument,
   GlobalWorkerOptions,
@@ -8,11 +8,6 @@ import {
 } from 'pdfjs-dist';
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
-import {
-  checkFixtureCitations,
-  type DocumentProxyLike,
-  type FixtureCheck,
-} from '../fixtures';
 import { extractPage, resolveQuote, type ExtractedPage } from '../pdfText';
 import type { Citation, Rect } from '../types';
 
@@ -32,10 +27,26 @@ interface RenderedPage {
 interface PdfPaneProps {
   pdfUrl: string;
   citation: Citation | null;
+  /** The same number shown beside the claim and in the source list. */
+  citationNumber: number | null;
   /** Stable per selection attempt; a miss is counted once per attempt. */
   attemptId: string;
   onMiss: (attemptId: string) => void;
-  onFixtureCheck: (check: FixtureCheck) => void;
+}
+
+interface MarkerPosition {
+  left: number;
+  top: number;
+}
+
+interface PassageMarker extends MarkerPosition {
+  attemptId: string;
+  citationKey: string;
+  number: number;
+}
+
+function citationIdentity(citation: Citation): string {
+  return `${citation.chunk_id}|${citation.page_no}|${citation.quote}`;
 }
 
 function supportsHighlights(): boolean {
@@ -84,7 +95,7 @@ function scrollRangeIntoView(range: Range, host: HTMLElement): void {
   }
   const top =
     host.scrollTop + rect.top - hostRect.top - host.clientHeight / 2 + rect.height / 2;
-  host.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  host.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
 }
 
 function drawRects(
@@ -104,6 +115,42 @@ function drawRects(
   }
 }
 
+function markerInMargin(
+  page: HTMLElement,
+  left: number,
+  right: number,
+  top: number,
+): MarkerPosition | null {
+  const pageRect = page.getBoundingClientRect();
+  if (pageRect.width === 0) {
+    return null;
+  }
+  const preferred = left - 28;
+  const fallback = right + 4;
+  const markerLeft = preferred >= 4 ? preferred : fallback;
+  return {
+    left: Math.max(4, Math.min(pageRect.width - 26, markerLeft)),
+    top: Math.max(2, top - 1),
+  };
+}
+
+function markerForRange(
+  range: Range,
+  page: HTMLElement,
+): MarkerPosition | null {
+  const rect = range.getClientRects()[0] ?? range.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) {
+    return null;
+  }
+  const pageRect = page.getBoundingClientRect();
+  return markerInMargin(
+    page,
+    rect.left - pageRect.left,
+    rect.right - pageRect.left,
+    rect.top - pageRect.top,
+  );
+}
+
 /**
  * Renders the cited PDF page, then highlights the citation quote with the CSS
  * Custom Highlight API. When the quote cannot be mapped back to a DOM range,
@@ -112,11 +159,12 @@ function drawRects(
 export function PdfPane({
   pdfUrl,
   citation,
+  citationNumber,
   attemptId,
   onMiss,
-  onFixtureCheck,
 }: PdfPaneProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const pageRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const textLayerRef = useRef<HTMLDivElement | null>(null);
   const rectLayerRef = useRef<HTMLDivElement | null>(null);
@@ -124,46 +172,31 @@ export function PdfPane({
   const [document, setDocument] = useState<PDFDocumentProxy | null>(null);
   const [scale, setScale] = useState(1.2);
   const [renderTick, setRenderTick] = useState(0);
+  const [marker, setMarker] = useState<PassageMarker | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const handleFixtureCheck = useCallback(
-    (check: FixtureCheck) => onFixtureCheck(check),
-    [onFixtureCheck],
-  );
 
   useEffect(() => {
     let cancelled = false;
     const task = getDocument({ url: pdfUrl, verbosity: 0 });
     task.promise
-      .then(async (loaded) => {
-        if (cancelled) {
-          return;
-        }
-        setDocument(loaded);
-        try {
-          const check = await checkFixtureCitations(
-            loaded as unknown as DocumentProxyLike,
-          );
-          if (!cancelled) {
-            handleFixtureCheck(check);
-          }
-        } catch {
-          // The fixture check is advisory; a failure must not blank the page.
+      .then((loaded) => {
+        if (!cancelled) {
+          setDocument(loaded);
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setError('The fixture PDF could not be loaded.');
+          setError('The paper could not be loaded.');
         }
       });
     return () => {
       cancelled = true;
       void task.destroy();
     };
-  }, [pdfUrl, handleFixtureCheck]);
+  }, [pdfUrl]);
 
-  // The selected citation owns the page; with no selection the fixture opens
-  // on page 1. This is derived state rather than a syncing effect.
+  // The selected citation owns the page; with no selection the paper opens on
+  // page 1. This is derived state rather than a syncing effect.
   const pageNo = citation?.page_no ?? 1;
 
   // Fit the page to the pane while keeping the text layer and canvas in step.
@@ -173,7 +206,7 @@ export function PdfPane({
       return;
     }
     const update = (width: number): void => {
-      const next = Math.max(0.55, Math.min(1.6, (width - 48) / BASE_WIDTH));
+      const next = Math.max(0.45, Math.min(1.6, (width - 48) / BASE_WIDTH));
       setScale((current) => (Math.abs(current - next) < 0.01 ? current : next));
     };
     update(host.clientWidth);
@@ -260,7 +293,7 @@ export function PdfPane({
 
     render().catch(() => {
       if (!cancelled) {
-        setError(`Page ${pageNo} could not be rendered.`);
+        setError(`Page ${pageNo} could not be shown.`);
       }
     });
 
@@ -288,6 +321,18 @@ export function PdfPane({
     const range = resolved
       ? textNodesFor(rendered.textDivs, resolved.slices)
       : null;
+    const page = pageRef.current;
+    if (range && page && citationNumber !== null) {
+      const position = markerForRange(range, page);
+      if (position) {
+        setMarker({
+          ...position,
+          attemptId,
+          citationKey: citationIdentity(citation),
+          number: citationNumber,
+        });
+      }
+    }
 
     if (range && supportsHighlights()) {
       CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(range));
@@ -301,28 +346,39 @@ export function PdfPane({
     // Fallback path: the stored PyMuPDF rectangles, scaled to the viewport.
     if (citation.rects && citation.rects.length > 0) {
       drawRects(rectLayer, citation.rects, rendered.scale);
+      const first = citation.rects[0];
+      if (!range && first && page && citationNumber !== null) {
+        const [x0, y0, x1] = first;
+        const position = markerInMargin(
+          page,
+          x0 * rendered.scale,
+          x1 * rendered.scale,
+          y0 * rendered.scale,
+        );
+        if (position) {
+          setMarker({
+            ...position,
+            attemptId,
+            citationKey: citationIdentity(citation),
+            number: citationNumber,
+          });
+        }
+      }
     }
     if (!range) {
       onMiss(attemptId);
     }
     return () => clearHighlight();
-  }, [citation, attemptId, renderTick, onMiss]);
+  }, [citation, citationNumber, attemptId, renderTick, onMiss]);
 
   useEffect(() => () => clearHighlight(), []);
 
   return (
-    <section className="pdf-pane" aria-label="Cited PDF page">
+    <section className="pdf-pane" aria-label="Document page">
       <header className="pane-head">
-        <div>
-          <h2>Source page</h2>
-          <p className="muted">
-            {citation
-              ? `${citation.doc_id} · page ${citation.page_no}`
-              : 'fixture-corpus · page 1'}
-          </p>
-        </div>
+        <p className="eyebrow">Passage</p>
         <span className="page-badge" data-testid="pdf-page-no">
-          p.{pageNo}
+          Page {pageNo}
         </span>
       </header>
 
@@ -334,24 +390,31 @@ export function PdfPane({
         ) : null}
         <div
           className="pdf-page"
+          ref={pageRef}
           style={{ width: Math.floor(BASE_WIDTH * scale) }}
         >
           <canvas ref={canvasRef} aria-label={`PDF page ${pageNo}`} />
           <div className="textLayer" ref={textLayerRef} />
           <div className="rect-layer" ref={rectLayerRef} />
+          {marker &&
+          citation &&
+          citationNumber !== null &&
+          marker.attemptId === attemptId &&
+          marker.citationKey === citationIdentity(citation) &&
+          marker.number === citationNumber ? (
+            <span
+              key={attemptId}
+              className="passage-marker"
+              style={{ left: marker.left, top: marker.top }}
+              data-testid="passage-marker"
+              aria-hidden="true"
+            >
+              {marker.number}
+            </span>
+          ) : null}
         </div>
       </div>
 
-      <footer className="pane-foot">
-        <span>
-          Quote resolution first; <code>rects[]</code> overlay is the fallback.
-        </span>
-        <span className="muted">
-          {supportsHighlights()
-            ? 'CSS Custom Highlight API available'
-            : 'CSS Custom Highlight API unavailable — rectangles only'}
-        </span>
-      </footer>
     </section>
   );
 }

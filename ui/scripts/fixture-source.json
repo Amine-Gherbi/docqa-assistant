@@ -5,23 +5,23 @@
   "pages": [
     {
       "page_no": 1,
-      "text": "Fixture Corpus\n\n1 Retrieval\n\n\n\n\nDense retrieval maps each passage to a single vector.\n\nThe vector index returns nearest neighbours by cosine distance.\n\nLexical retrieval matches rare terms that embeddings often miss.\n\nReciprocal rank fusion merges two lists without score scaling.\n\nA cross encoder reranks the fused candidates in a second pass.\n\n\n\n\n\nCommitted fixture for the docqa assistant citation UI. Page 1 of 4.",
-      "sha256": "fc10adc3fac31a6ea5559d78a79371a04f6df50048af4b7c0e57101481e94303"
+      "text": "Fixture Corpus\n\n1 Retrieval\n\n\n\n\nDense retrieval maps each passage to a single vector.\n\nThe vector index returns nearest neighbours by cosine distance.\n\nLexical retrieval matches rare terms that embeddings often miss.\n\nReciprocal rank fusion merges two lists without score scaling.\n\nA cross encoder reranks the fused candidates in a second pass.\n\n\n\n\n\nCommitted fixture for the Marginalia citation UI. Page 1 of 4.",
+      "sha256": "c868caed3949e4a9cccc33201702e42ebecf0ad1f2f5bf633a4a5bc33e2f90f3"
     },
     {
       "page_no": 2,
-      "text": "Fixture Corpus\n\n2 Calibration\n\n\n\n\nThe refusal threshold is fitted on held out query passage pairs.\n\nA calibrated probability below the threshold triggers a refusal.\n\nEvery citation must quote a verbatim span from its passage.\n\nA claim whose quote is absent is dropped before it is displayed.\n\nEach page is hashed so an extractor upgrade fails loudly.\n\n\n\n\n\nCommitted fixture for the docqa assistant citation UI. Page 2 of 4.",
-      "sha256": "4fe98a203abe6d4f53ad9dc47f5c19fa30811035a30cf19908615143980aa8c6"
+      "text": "Fixture Corpus\n\n2 Calibration\n\n\n\n\nThe refusal threshold is fitted on held out query passage pairs.\n\nA calibrated probability below the threshold triggers a refusal.\n\nEvery citation must quote a verbatim span from its passage.\n\nA claim whose quote is absent is dropped before it is displayed.\n\nEach page is hashed so an extractor upgrade fails loudly.\n\n\n\n\n\nCommitted fixture for the Marginalia citation UI. Page 2 of 4.",
+      "sha256": "19da52e979261edeb95cbd712bf9d08e111287bd9b47540d04987ba6faaf11a3"
     },
     {
       "page_no": 3,
-      "text": "Fixture Corpus\n\n3 Citations\n\n\n\n\nThis fixture corpus exists to exercise the citation interface.\n\nHybrid retrieval finds the rare term “quokka” but vector only misses it.\n\nThe lexical ranker uses ts_rank_cd rather than BM25.\n\nReranking can move a passage from rank nine to rank one.\n\nThe final context contains at most eight passages.\n\n\n\n\n\nCommitted fixture for the docqa assistant citation UI. Page 3 of 4.",
-      "sha256": "4ca5e8907f9eec19590b6e018dbccc76754aac9589e3f76016761f0414c53ef2"
+      "text": "Fixture Corpus\n\n3 Citations\n\n\n\n\nThis fixture corpus exists to exercise the citation interface.\n\nHybrid retrieval finds the rare term “quokka” but vector only misses it.\n\nThe lexical ranker uses ts_rank_cd rather than BM25.\n\nReranking can move a passage from rank nine to rank one.\n\nThe final context contains at most eight passages.\n\n\n\n\n\nCommitted fixture for the Marginalia citation UI. Page 3 of 4.",
+      "sha256": "dc3d66c0e98855ff264501eeb27f47b082f6c9f40b408b21553aeec876579167"
     },
     {
       "page_no": 4,
-      "text": "Fixture Corpus\n\n4 Rendering\n\n\n\n\nThe highlight layer rebuilds the page string before it searches.\n\nWhitespace is collapsed and typographic quotes are normalised.\n\nOn a miss, the interface draws the stored rectangles instead.\n\nThe citation render miss counter is reported with every answer.\n\nAn answer with no resolvable citation is never shown to the reader.\n\n\n\n\n\nCommitted fixture for the docqa assistant citation UI. Page 4 of 4.",
-      "sha256": "4a62d617b814d45dd19ad544a560af77b5befead1bd96d2b41b0fe54fe41cac7"
+      "text": "Fixture Corpus\n\n4 Rendering\n\n\n\n\nThe highlight layer rebuilds the page string before it searches.\n\nWhitespace is collapsed and typographic quotes are normalised.\n\nOn a miss, the interface draws the stored rectangles instead.\n\nThe citation render miss counter is reported with every answer.\n\nAn answer with no resolvable citation is never shown to the reader.\n\n\n\n\n\nCommitted fixture for the Marginalia citation UI. Page 4 of 4.",
+      "sha256": "6adc46876592667b4ac63ae59ff516bf31cf491230e8f0ef4d23fbd5ff9db948"
     }
   ],
   "citations": [
@@ -32,7 +32,7 @@
       "page_no": 1,
       "char_start": 32,
       "char_end": 85,
-      "page_text_sha256": "fc10adc3fac31a6ea5559d78a79371a04f6df50048af4b7c0e57101481e94303",
+      "page_text_sha256": "c868caed3949e4a9cccc33201702e42ebecf0ad1f2f5bf633a4a5bc33e2f90f3",
       "quote": "Dense retrieval maps each passage to a single vector.",
       "rects": [
         [
@@ -50,7 +50,7 @@
       "page_no": 1,
       "char_start": 87,
       "char_end": 150,
-      "page_text_sha256": "fc10adc3fac31a6ea5559d78a79371a04f6df50048af4b7c0e57101481e94303",
+      "page_text_sha256": "c868caed3949e4a9cccc33201702e42ebecf0ad1f2f5bf633a4a5bc33e2f90f3",
       "quote": "The vector index returns nearest neighbours by cosine distance.",
       "rects": [
         [
@@ -68,7 +68,7 @@
       "page_no": 1,
       "char_start": 152,
       "char_end": 216,
-      "page_text_sha256": "fc10adc3fac31a6ea5559d78a79371a04f6df50048af4b7c0e57101481e94303",
+      "page_text_sha256": "c868caed3949e4a9cccc33201702e42ebecf0ad1f2f5bf633a4a5bc33e2f90f3",
       "quote": "Lexical retrieval matches rare terms that embeddings often miss.",
       "rects": [
         [
@@ -86,7 +86,7 @@
       "page_no": 1,
       "char_start": 218,
       "char_end": 280,
-      "page_text_sha256": "fc10adc3fac31a6ea5559d78a79371a04f6df50048af4b7c0e57101481e94303",
+      "page_text_sha256": "c868caed3949e4a9cccc33201702e42ebecf0ad1f2f5bf633a4a5bc33e2f90f3",
       "quote": "Reciprocal rank fusion merges two lists without score scaling.",
       "rects": [
         [
@@ -104,7 +104,7 @@
       "page_no": 1,
       "char_start": 282,
       "char_end": 344,
-      "page_text_sha256": "fc10adc3fac31a6ea5559d78a79371a04f6df50048af4b7c0e57101481e94303",
+      "page_text_sha256": "c868caed3949e4a9cccc33201702e42ebecf0ad1f2f5bf633a4a5bc33e2f90f3",
       "quote": "A cross encoder reranks the fused candidates in a second pass.",
       "rects": [
         [
@@ -122,7 +122,7 @@
       "page_no": 2,
       "char_start": 34,
       "char_end": 98,
-      "page_text_sha256": "4fe98a203abe6d4f53ad9dc47f5c19fa30811035a30cf19908615143980aa8c6",
+      "page_text_sha256": "19da52e979261edeb95cbd712bf9d08e111287bd9b47540d04987ba6faaf11a3",
       "quote": "The refusal threshold is fitted on held out query passage pairs.",
       "rects": [
         [
@@ -140,7 +140,7 @@
       "page_no": 2,
       "char_start": 100,
       "char_end": 164,
-      "page_text_sha256": "4fe98a203abe6d4f53ad9dc47f5c19fa30811035a30cf19908615143980aa8c6",
+      "page_text_sha256": "19da52e979261edeb95cbd712bf9d08e111287bd9b47540d04987ba6faaf11a3",
       "quote": "A calibrated probability below the threshold triggers a refusal.",
       "rects": [
         [
@@ -158,7 +158,7 @@
       "page_no": 2,
       "char_start": 166,
       "char_end": 225,
-      "page_text_sha256": "4fe98a203abe6d4f53ad9dc47f5c19fa30811035a30cf19908615143980aa8c6",
+      "page_text_sha256": "19da52e979261edeb95cbd712bf9d08e111287bd9b47540d04987ba6faaf11a3",
       "quote": "Every citation must quote a verbatim span from its passage.",
       "rects": [
         [
@@ -176,7 +176,7 @@
       "page_no": 2,
       "char_start": 227,
       "char_end": 291,
-      "page_text_sha256": "4fe98a203abe6d4f53ad9dc47f5c19fa30811035a30cf19908615143980aa8c6",
+      "page_text_sha256": "19da52e979261edeb95cbd712bf9d08e111287bd9b47540d04987ba6faaf11a3",
       "quote": "A claim whose quote is absent is dropped before it is displayed.",
       "rects": [
         [
@@ -194,7 +194,7 @@
       "page_no": 2,
       "char_start": 293,
       "char_end": 350,
-      "page_text_sha256": "4fe98a203abe6d4f53ad9dc47f5c19fa30811035a30cf19908615143980aa8c6",
+      "page_text_sha256": "19da52e979261edeb95cbd712bf9d08e111287bd9b47540d04987ba6faaf11a3",
       "quote": "Each page is hashed so an extractor upgrade fails loudly.",
       "rects": [
         [
@@ -212,7 +212,7 @@
       "page_no": 3,
       "char_start": 32,
       "char_end": 94,
-      "page_text_sha256": "4ca5e8907f9eec19590b6e018dbccc76754aac9589e3f76016761f0414c53ef2",
+      "page_text_sha256": "dc3d66c0e98855ff264501eeb27f47b082f6c9f40b408b21553aeec876579167",
       "quote": "This fixture corpus exists to exercise the citation interface.",
       "rects": [
         [
@@ -230,7 +230,7 @@
       "page_no": 3,
       "char_start": 96,
       "char_end": 168,
-      "page_text_sha256": "4ca5e8907f9eec19590b6e018dbccc76754aac9589e3f76016761f0414c53ef2",
+      "page_text_sha256": "dc3d66c0e98855ff264501eeb27f47b082f6c9f40b408b21553aeec876579167",
       "quote": "Hybrid retrieval finds the rare term “quokka” but vector only misses it.",
       "rects": [
         [
@@ -248,7 +248,7 @@
       "page_no": 3,
       "char_start": 170,
       "char_end": 222,
-      "page_text_sha256": "4ca5e8907f9eec19590b6e018dbccc76754aac9589e3f76016761f0414c53ef2",
+      "page_text_sha256": "dc3d66c0e98855ff264501eeb27f47b082f6c9f40b408b21553aeec876579167",
       "quote": "The lexical ranker uses ts_rank_cd rather than BM25.",
       "rects": [
         [
@@ -266,7 +266,7 @@
       "page_no": 3,
       "char_start": 224,
       "char_end": 280,
-      "page_text_sha256": "4ca5e8907f9eec19590b6e018dbccc76754aac9589e3f76016761f0414c53ef2",
+      "page_text_sha256": "dc3d66c0e98855ff264501eeb27f47b082f6c9f40b408b21553aeec876579167",
       "quote": "Reranking can move a passage from rank nine to rank one.",
       "rects": [
         [
@@ -284,7 +284,7 @@
       "page_no": 3,
       "char_start": 282,
       "char_end": 332,
-      "page_text_sha256": "4ca5e8907f9eec19590b6e018dbccc76754aac9589e3f76016761f0414c53ef2",
+      "page_text_sha256": "dc3d66c0e98855ff264501eeb27f47b082f6c9f40b408b21553aeec876579167",
       "quote": "The final context contains at most eight passages.",
       "rects": [
         [
@@ -302,7 +302,7 @@
       "page_no": 4,
       "char_start": 32,
       "char_end": 96,
-      "page_text_sha256": "4a62d617b814d45dd19ad544a560af77b5befead1bd96d2b41b0fe54fe41cac7",
+      "page_text_sha256": "6adc46876592667b4ac63ae59ff516bf31cf491230e8f0ef4d23fbd5ff9db948",
       "quote": "The highlight layer rebuilds the page string before it searches.",
       "rects": [
         [
@@ -320,7 +320,7 @@
       "page_no": 4,
       "char_start": 98,
       "char_end": 160,
-      "page_text_sha256": "4a62d617b814d45dd19ad544a560af77b5befead1bd96d2b41b0fe54fe41cac7",
+      "page_text_sha256": "6adc46876592667b4ac63ae59ff516bf31cf491230e8f0ef4d23fbd5ff9db948",
       "quote": "Whitespace is collapsed and typographic quotes are normalised.",
       "rects": [
         [
@@ -338,7 +338,7 @@
       "page_no": 4,
       "char_start": 162,
       "char_end": 223,
-      "page_text_sha256": "4a62d617b814d45dd19ad544a560af77b5befead1bd96d2b41b0fe54fe41cac7",
+      "page_text_sha256": "6adc46876592667b4ac63ae59ff516bf31cf491230e8f0ef4d23fbd5ff9db948",
       "quote": "On a miss, the interface draws the stored rectangles instead.",
       "rects": [
         [
@@ -356,7 +356,7 @@
       "page_no": 4,
       "char_start": 225,
       "char_end": 288,
-      "page_text_sha256": "4a62d617b814d45dd19ad544a560af77b5befead1bd96d2b41b0fe54fe41cac7",
+      "page_text_sha256": "6adc46876592667b4ac63ae59ff516bf31cf491230e8f0ef4d23fbd5ff9db948",
       "quote": "The citation render miss counter is reported with every answer.",
       "rects": [
         [
@@ -374,7 +374,7 @@
       "page_no": 4,
       "char_start": 290,
       "char_end": 357,
-      "page_text_sha256": "4a62d617b814d45dd19ad544a560af77b5befead1bd96d2b41b0fe54fe41cac7",
+      "page_text_sha256": "6adc46876592667b4ac63ae59ff516bf31cf491230e8f0ef4d23fbd5ff9db948",
       "quote": "An answer with no resolvable citation is never shown to the reader.",
       "rects": [
         [

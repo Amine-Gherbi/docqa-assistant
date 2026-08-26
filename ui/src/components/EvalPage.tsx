@@ -36,11 +36,33 @@ const GALLERY = galleryJson as unknown as GalleryFile;
 
 type ReportState =
   | { status: 'loading' }
-  | { status: 'ready'; report: unknown; source: string }
+  | { status: 'ready'; report: unknown }
   | { status: 'empty' }
   | { status: 'error'; message: string };
 
 const REPORT_URLS = [EVAL_REPORT_URL, '/eval-report.json', '/api/eval/report'];
+
+interface GateResult {
+  name: string;
+  label: string;
+  passed: boolean;
+  rate: number;
+  successes: number | null;
+  denominator: number | null;
+  wilson: [number, number] | null;
+}
+
+interface MetricRow {
+  label: string;
+  value: string;
+  denominator: string | null;
+  ci: string | null;
+}
+
+interface StageCount {
+  label: string;
+  value: number;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -70,13 +92,6 @@ function textAt(
     }
   }
   return null;
-}
-
-interface MetricRow {
-  label: string;
-  value: string;
-  denominator: string | null;
-  ci: string | null;
 }
 
 function confidenceInterval(
@@ -147,7 +162,7 @@ function metricsFrom(report: unknown): MetricRow[] {
     if (Array.isArray(group)) {
       group.forEach((entry, index) => {
         if (isRecord(entry)) {
-          const row = metricRow(`metric ${index + 1}`, entry);
+          const row = metricRow(`Metric ${index + 1}`, entry);
           if (row) {
             rows.push(row);
           }
@@ -174,14 +189,108 @@ function metricsFrom(report: unknown): MetricRow[] {
   return rows;
 }
 
-function headlineScalars(report: unknown): [string, string][] {
-  if (!isRecord(report)) {
+function readable(value: string): string {
+  const words = value.replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+const GATE_LABELS: Record<string, string> = {
+  retrieval_recall_at_8: 'Finds the supporting passage in the top eight',
+  answer_rate_answerable: 'Answers questions the document can support',
+  unanswerable_refusal_rate: 'Withholds an answer when the document cannot support one',
+  citation_precision: 'Citations name the supporting passage',
+  faithfulness: 'Sentences stay within their cited passage',
+};
+
+function readGates(report: unknown): GateResult[] {
+  if (!isRecord(report) || !Array.isArray(report.gates)) {
     return [];
   }
-  return Object.entries(report)
-    .filter(([, value]) => ['string', 'number', 'boolean'].includes(typeof value))
-    .slice(0, 12)
-    .map(([key, value]) => [key, String(value)]);
+  const gates: GateResult[] = [];
+  for (const entry of report.gates) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const name = textAt(entry, ['name']);
+    const rate = numberAt(entry, ['rate', 'value']);
+    if (name === null || rate === null) {
+      continue;
+    }
+    gates.push({
+      name,
+      label: GATE_LABELS[name] ?? readable(name),
+      passed: entry.passed === true,
+      rate,
+      successes: numberAt(entry, ['successes', 'success', 'count']),
+      denominator: numberAt(entry, ['n', 'denominator', 'total']),
+      wilson: confidenceInterval(entry),
+    });
+  }
+  return gates;
+}
+
+function readStageCounts(report: unknown): StageCount[] {
+  if (!isRecord(report) || !isRecord(report.metrics)) {
+    return [];
+  }
+  const counts = report.metrics.stage_failed_counts;
+  if (!isRecord(counts)) {
+    return [];
+  }
+  const labels: Record<string, string> = {
+    retrieval: 'Search',
+    fusion: 'Merged ranking',
+    rerank: 'Rescoring',
+    generation: 'Answer writing',
+    schema: 'Output format',
+  };
+  return Object.entries(counts).flatMap(([key, value]) =>
+    typeof value === 'number'
+      ? [{ label: labels[key] ?? readable(key), value }]
+      : [],
+  );
+}
+
+function readProvenance(report: unknown): Record<string, unknown> | null {
+  return isRecord(report) && isRecord(report.provenance)
+    ? report.provenance
+    : null;
+}
+
+function generatorInfo(
+  provenance: Record<string, unknown> | null,
+): { name: string | null; structuredOutput: string | null } {
+  if (!provenance || !isRecord(provenance.generator)) {
+    return { name: null, structuredOutput: null };
+  }
+  return {
+    name: textAt(provenance.generator, ['name']),
+    structuredOutput: textAt(provenance.generator, ['structured_output']),
+  };
+}
+
+function formatPercent(value: number): string {
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function formatInterval(interval: [number, number] | null): string {
+  return interval === null
+    ? '—'
+    : `[${formatPercent(interval[0])}, ${formatPercent(interval[1])}]`;
+}
+
+function formatTimestamp(value: string | null): string {
+  if (value === null) {
+    return '—';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat('en-GB', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(date);
 }
 
 function formatReport(report: unknown): string {
@@ -192,58 +301,174 @@ function formatReport(report: unknown): string {
   }
 }
 
-function ReportView({ report, source }: { report: unknown; source: string }) {
+function ReportView({ report }: { report: unknown }) {
+  const gates = readGates(report);
   const metrics = metricsFrom(report);
-  const headline = headlineScalars(report);
+  const stageCounts = readStageCounts(report);
+  const provenance = readProvenance(report);
+  const generator = generatorInfo(provenance);
+  const noKey = generator.structuredOutput === 'extractive';
+  const passedCount = gates.filter((gate) => gate.passed).length;
+  const generatedAt = isRecord(report)
+    ? textAt(report, ['generated_at', 'generatedAt'])
+    : null;
+  const questions =
+    provenance === null
+      ? null
+      : numberAt(provenance, ['questions', 'question_count']);
+  const answerable =
+    provenance === null
+      ? null
+      : numberAt(provenance, ['answerable', 'answerable_questions']);
+  const unanswerable =
+    provenance === null
+      ? null
+      : numberAt(provenance, ['unanswerable', 'unanswerable_questions']);
 
   return (
     <>
-      <div className="eval-source">
-        <span className="chip kept">report loaded</span>
-        <code>{source}</code>
+      <div className="section-heading eval-heading">
+        <div>
+          <p className="eyebrow">Last run</p>
+          <h2 id="report-heading">Measured results</h2>
+        </div>
+        {gates.length > 0 ? (
+          <span
+            className={
+              passedCount === gates.length
+                ? 'status-badge all-met'
+                : 'status-badge'
+            }
+          >
+            {passedCount} of {gates.length} checks met
+          </span>
+        ) : null}
       </div>
 
-      {headline.length > 0 ? (
-        <dl className="headline-grid">
-          {headline.map(([key, value]) => (
-            <div key={key}>
-              <dt>{key}</dt>
-              <dd>{value}</dd>
-            </div>
-          ))}
-        </dl>
+      {noKey ? (
+        <div className="no-key-note">
+          <span className="no-key-badge">No-key mode</span>
+          <p>
+            The extractive answer path produced this run because no generator
+            model key was configured. The measured results below are shown
+            unchanged.
+          </p>
+        </div>
       ) : null}
 
-      {metrics.length > 0 ? (
-        <table className="trace-table eval-table">
-          <thead>
-            <tr>
-              <th>metric</th>
-              <th>value</th>
-              <th>denominator</th>
-              <th>Wilson 95% CI</th>
-            </tr>
-          </thead>
-          <tbody>
-            {metrics.map((row, index) => (
-              <tr key={`${row.label}-${index}`}>
-                <td>{row.label}</td>
-                <td className="num">{row.value}</td>
-                <td className="num">{row.denominator ?? '—'}</td>
-                <td className="num">{row.ci ?? '—'}</td>
+      <dl className="eval-facts">
+        <div>
+          <dt>Report date</dt>
+          <dd>{formatTimestamp(generatedAt)}</dd>
+        </div>
+        <div>
+          <dt>Questions</dt>
+          <dd>{questions ?? '—'}</dd>
+        </div>
+        <div>
+          <dt>Answerable</dt>
+          <dd>{answerable ?? '—'}</dd>
+        </div>
+        <div>
+          <dt>Unanswerable</dt>
+          <dd>{unanswerable ?? '—'}</dd>
+        </div>
+      </dl>
+
+      {gates.length > 0 ? (
+        <div className="table-scroll">
+          <table className="data-table eval-table">
+            <thead>
+              <tr>
+                <th>Check</th>
+                <th>Result</th>
+                <th>Rate</th>
+                <th>Count</th>
+                <th>95% confidence range</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {gates.map((gate) => (
+                <tr key={gate.name}>
+                  <td data-label="Check">{gate.label}</td>
+                  <td data-label="Result">
+                    <span
+                      className={
+                        gate.passed ? 'chip kept' : 'chip not-met'
+                      }
+                    >
+                      {gate.passed ? 'Met' : 'Not met'}
+                    </span>
+                  </td>
+                  <td className="num" data-label="Rate">
+                    {formatPercent(gate.rate)}
+                  </td>
+                  <td className="num" data-label="Count">
+                    {gate.successes !== null &&
+                    gate.denominator !== null
+                      ? `${gate.successes}/${gate.denominator}`
+                      : '—'}
+                  </td>
+                  <td className="num" data-label="95% confidence range">
+                    {formatInterval(gate.wilson)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : metrics.length > 0 ? (
+        <div className="table-scroll">
+          <table className="data-table eval-table">
+            <thead>
+              <tr>
+                <th>Rate</th>
+                <th>Value</th>
+                <th>Denominator</th>
+                <th>Wilson 95% interval</th>
+              </tr>
+            </thead>
+            <tbody>
+              {metrics.map((row, index) => (
+                <tr key={`${row.label}-${index}`}>
+                  <td data-label="Rate">{readable(row.label)}</td>
+                  <td className="num" data-label="Value">
+                    {row.value}
+                  </td>
+                  <td className="num" data-label="Denominator">
+                    {row.denominator ?? '—'}
+                  </td>
+                  <td className="num" data-label="Wilson 95% interval">
+                    {row.ci ?? '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       ) : (
         <p className="empty">
-          The report loaded, but no rate table was recognised in its shape.
-          The full JSON is below.
+          The report loaded, but no rate table was recognised in its shape. The
+          full report is below.
         </p>
       )}
 
+      {stageCounts.length > 0 ? (
+        <section className="stage-counts" aria-labelledby="stage-heading">
+          <h3 id="stage-heading">Where questions stopped</h3>
+          <dl>
+            {stageCounts.map((stage) => (
+              <div key={stage.label}>
+                <dt>{stage.label}</dt>
+                <dd>{stage.value}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+      ) : null}
+
       <details className="raw-report">
-        <summary>Raw eval-report.json</summary>
+        <summary>Full saved report</summary>
         <pre>{formatReport(report)}</pre>
       </details>
     </>
@@ -253,20 +478,25 @@ function ReportView({ report, source }: { report: unknown; source: string }) {
 function Gallery() {
   return (
     <section className="gallery" aria-labelledby="gallery-heading">
-      <header>
-        <h2 id="gallery-heading">Failure gallery</h2>
-        <p className="muted">
-          Three cases where a naive answer looks right and the pipeline refuses,
-          drops, or corrects it. Rendered from the committed fixture.
-        </p>
-      </header>
+      <div className="section-heading eval-heading">
+        <div>
+          <p className="eyebrow">Inspectable edge cases</p>
+          <h2 id="gallery-heading">Edge cases</h2>
+        </div>
+        <span className="status-badge">{GALLERY.cases.length} cases</span>
+      </div>
+      <p className="gallery-intro">
+        Three cases where a plausible answer would be wrong, and the pipeline
+        withholds, removes, or corrects it.
+      </p>
       <div className="gallery-grid">
         {GALLERY.cases.map((item) => (
           <article className="gallery-card" key={item.id}>
             <p className="gallery-kind">{item.kind}</p>
             <h3>{item.title}</h3>
             <p className="gallery-question">
-              <strong>Q:</strong> {item.question}
+              <span>Question</span>
+              {item.question}
             </p>
             <p className="gallery-verdict">{item.verdict}</p>
             <p>{item.explanation}</p>
@@ -282,8 +512,8 @@ function Gallery() {
               {item.passages.map((passage, index) => (
                 <li key={`${item.id}-${passage.chunk_id}-${index}`}>
                   <span className="passage-meta">
-                    {passage.doc_id} · p.{passage.page_no} · chunk{' '}
-                    {passage.chunk_id}
+                    {passage.doc_id} · page {passage.page_no} ·{' '}
+                    {passage.breadcrumb}
                     {passage.score === null
                       ? ''
                       : ` · score ${passage.score.toFixed(2)}`}
@@ -307,11 +537,13 @@ export function EvalPage() {
     const load = async (): Promise<void> => {
       for (const url of REPORT_URLS) {
         try {
-          const response = await fetch(url, { headers: { Accept: 'application/json' } });
+          const response = await fetch(url, {
+            headers: { Accept: 'application/json' },
+          });
           if (response.ok) {
             const report: unknown = await response.json();
             if (!cancelled) {
-              setState({ status: 'ready', report, source: url });
+              setState({ status: 'ready', report });
             }
             return;
           }
@@ -325,7 +557,10 @@ export function EvalPage() {
     };
     load().catch(() => {
       if (!cancelled) {
-        setState({ status: 'error', message: 'The eval report could not be read.' });
+        setState({
+          status: 'error',
+          message: 'The evaluation report could not be read.',
+        });
       }
     });
     return () => {
@@ -335,25 +570,21 @@ export function EvalPage() {
 
   return (
     <main className="page eval-page">
-      <header className="page-head">
-        <div>
-          <p className="eyebrow">Evaluation</p>
-          <h1>Gates, rates, and failure cases</h1>
-          <p className="lede">
-            Every rate is printed with a Wilson 95% confidence interval and its
-            denominator. If no report exists yet, this page says so instead of
-            inventing numbers.
-          </p>
-        </div>
+      <header className="eval-head">
+        <p className="eyebrow">Evaluation</p>
+        <h1>Measure the answer, not the demo.</h1>
+        <p className="lede">
+          Each rate comes from the saved evaluation run, with its denominator and
+          a 95% confidence range. Missing reports are reported as missing.
+        </p>
       </header>
 
-      <section className="eval-report" aria-labelledby="report-heading">
-        <h2 id="report-heading">Eval report</h2>
+      <section className="eval-report" aria-label="Evaluation report">
         {state.status === 'loading' ? (
-          <p className="empty">Looking for eval-report.json…</p>
+          <p className="empty">Looking for the saved evaluation report…</p>
         ) : null}
         {state.status === 'ready' ? (
-          <ReportView report={state.report} source={state.source} />
+          <ReportView report={state.report} />
         ) : null}
         {state.status === 'error' ? (
           <p className="pane-error" role="alert">
@@ -362,10 +593,10 @@ export function EvalPage() {
         ) : null}
         {state.status === 'empty' ? (
           <div className="empty-report">
+            <h2 id="report-heading">No saved report</h2>
             <p>
-              No eval report is being served. Run <code>uv run docqa eval</code>{' '}
-              and serve the resulting <code>eval-report.json</code>; this page
-              reads it from <code>{EVAL_REPORT_URL}</code> first.
+              No evaluation report is being served. Run the evaluation and
+              refresh this page to load the measured results.
             </p>
           </div>
         ) : null}

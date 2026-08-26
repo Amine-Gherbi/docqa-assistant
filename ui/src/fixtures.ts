@@ -1,8 +1,13 @@
 /** Typed access to the committed citation fixture and its self-check. */
 
 import rawFixture from './fixtures/citations.json';
+import rawDemoAnswer from './fixtures/demo-answer.json';
 import { extractPage, resolveQuote, type ExtractedPage } from './pdfText';
-import type { CitationFixture, FixtureCitation } from './types';
+import type {
+  AskResponse,
+  CitationFixture,
+  FixtureCitation,
+} from './types';
 
 export const CITATION_FIXTURE = rawFixture as unknown as CitationFixture;
 export const FIXTURE_DOC_ID = CITATION_FIXTURE.doc_id;
@@ -10,6 +15,17 @@ export const FIXTURE_PDF_URL = CITATION_FIXTURE.pdf;
 export const FIXTURE_CITATIONS: readonly FixtureCitation[] =
   CITATION_FIXTURE.citations;
 export const FIXTURE_PAGE_COUNT = CITATION_FIXTURE.pages.length;
+
+/**
+ * The synthetic demo answer is kept for deterministic quote-resolution tests.
+ * The running UI uses the real paper in `demoPaper.ts` instead.
+ */
+export interface FixtureDemoAnswer extends AskResponse {
+  question: string;
+  demo_note: string;
+}
+
+export const FIXTURE_DEMO_ANSWER = rawDemoAnswer as unknown as FixtureDemoAnswer;
 
 export interface FixtureCheckMiss {
   id: string;

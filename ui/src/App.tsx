@@ -1,16 +1,35 @@
-import { useCallback, useRef, useState, type FormEvent } from 'react';
+import {
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+} from 'react';
 
-import { askQuestion, DEMO_ANSWER, demoMatches } from './api';
+import { askQuestion } from './api';
 import { EvalPage } from './components/EvalPage';
 import { PdfPane } from './components/PdfPane';
 import { TraceDrawer } from './components/TraceDrawer';
-import { FIXTURE_DOC_ID, type FixtureCheck } from './fixtures';
+import {
+  DEFAULT_DEMO_QUESTION,
+  DEMO_PAPER,
+  DEMO_QUESTIONS,
+  demoForQuestion,
+  type DemoQuestion,
+} from './demoPaper';
+import { formatQuoted } from './typography';
 import type { AskResponse, Citation } from './types';
 
 interface Selection {
   citation: Citation;
-  claimIndex: number;
   attemptId: string;
+}
+
+interface SourceEntry {
+  number: number;
+  citation: Citation;
 }
 
 function isEvalRoute(): boolean {
@@ -18,108 +37,196 @@ function isEvalRoute(): boolean {
   return path === '/eval';
 }
 
-function TopBar({ onEval }: { onEval: boolean }) {
+function citationKey(citation: Citation): string {
+  return `${citation.chunk_id}|${citation.page_no}|${citation.quote}`;
+}
+
+function sourceLabel(source: { doc_id: string }): string {
+  return source.doc_id === DEMO_PAPER.doc_id
+    ? DEMO_PAPER.title
+    : source.doc_id;
+}
+
+function collectSources(answer: AskResponse | null): SourceEntry[] {
+  if (!answer) {
+    return [];
+  }
+  const seen = new Map<string, SourceEntry>();
+  for (const claim of answer.claims) {
+    for (const citation of claim.citations) {
+      const key = citationKey(citation);
+      if (!seen.has(key)) {
+        seen.set(key, { number: seen.size + 1, citation });
+      }
+    }
+  }
+  return [...seen.values()];
+}
+
+function SiteHeader({ onEval }: { onEval: boolean }) {
   return (
-    <header className="topbar">
-      <a className="brand" href="/">
-        <span className="brand-mark">P4</span>
-        <span>docqa-assistant</span>
+    <header className="site-header">
+      <a className="brand" href="/" aria-label="Marginalia home">
+        <span className="brand-mark" aria-hidden="true">
+          M
+        </span>
+        <span className="brand-name">Marginalia</span>
       </a>
-      <nav className="nav">
+      <p className="header-line">
+        Answers from your PDFs, with the page and passage behind every sentence.
+      </p>
+      <nav className="site-nav" aria-label="Primary">
         <a
           href="/"
-          className={onEval ? '' : 'active'}
+          className={onEval ? undefined : 'active'}
           aria-current={onEval ? undefined : 'page'}
         >
           Ask
         </a>
         <a
           href="/eval"
-          className={onEval ? 'active' : ''}
+          className={onEval ? 'active' : undefined}
           aria-current={onEval ? 'page' : undefined}
         >
-          Eval
+          Evaluation
         </a>
       </nav>
-      <span className="ports" title="Windows excludes 8001-8300 on this machine">
-        API :8788 · UI :5173
-      </span>
     </header>
   );
 }
 
-function show(value: number | null, digits = 3): string {
-  return value === null ? '—' : value.toFixed(digits);
-}
-
-function CitationChips({
-  citations,
-  selection,
+function CitationMark({
+  citation,
+  number,
+  selected,
   onSelect,
 }: {
-  citations: readonly Citation[];
-  selection: Selection | null;
-  onSelect: (citation: Citation) => void;
+  citation: Citation;
+  number: number;
+  selected: boolean;
+  onSelect: () => void;
 }) {
   return (
-    <div className="chips">
-      {citations.map((citation, index) => {
-        const selected =
-          selection?.citation.chunk_id === citation.chunk_id &&
-          selection.citation.page_no === citation.page_no &&
-          selection.citation.quote === citation.quote;
-        return (
-          <button
-            key={`${citation.chunk_id}-${citation.page_no}-${index}`}
-            type="button"
-            className={selected ? 'citation-chip selected' : 'citation-chip'}
-            title={citation.quote}
-            onClick={() => onSelect(citation)}
-          >
-            p.{citation.page_no}
-            <span className="chip-chunk">· chunk {citation.chunk_id}</span>
-          </button>
-        );
-      })}
-    </div>
+    <sup className="claim-citation">
+      <button
+        type="button"
+        className={selected ? 'citation-sup selected' : 'citation-sup'}
+        aria-label={`Source ${number}: ${sourceLabel(citation)}, page ${citation.page_no}`}
+        aria-pressed={selected}
+        title={citation.quote}
+        data-testid="claim-citation"
+        onClick={onSelect}
+      >
+        {number}
+      </button>
+    </sup>
   );
+}
+
+function Sources({
+  sources,
+  selectedKey,
+  onSelect,
+}: {
+  sources: readonly SourceEntry[];
+  selectedKey: string | null;
+  onSelect: (citation: Citation) => void;
+}) {
+  if (sources.length === 0) {
+    return null;
+  }
+  return (
+    <section className="sources" aria-labelledby="sources-heading">
+      <h3 id="sources-heading">Sources</h3>
+      <ol className="source-list">
+        {sources.map(({ number, citation }) => {
+          const selected = selectedKey === citationKey(citation);
+          return (
+            <li key={citationKey(citation)}>
+              <button
+                type="button"
+                className={selected ? 'source-row selected' : 'source-row'}
+                aria-label={`Source ${number}: ${sourceLabel(citation)}, page ${citation.page_no}`}
+                aria-pressed={selected}
+                data-testid="source-row"
+                onClick={() => onSelect(citation)}
+              >
+                <span className="source-number">{number}</span>
+                <span className="source-copy">
+                  <span className="source-meta">
+                    <span className="source-file">{sourceLabel(citation)}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>Page {citation.page_no}</span>
+                  </span>
+                  <span className="source-quote">
+                    {formatQuoted(citation.quote)}
+                  </span>
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
+function ExampleQuestions({
+  onChoose,
+}: {
+  onChoose: (example: DemoQuestion) => void;
+}) {
+  return (
+    <section className="examples" aria-labelledby="examples-heading">
+      <h3 id="examples-heading" className="examples-heading">
+        Example questions
+      </h3>
+      <ul className="example-list">
+        {DEMO_QUESTIONS.map((example) => (
+          <li key={example.question}>
+            <button
+              type="button"
+              className="example-question"
+              data-testid="example-question"
+              onClick={() => onChoose(example)}
+            >
+              {example.question}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function refusalCopy(reason: string | null): string {
+  switch (reason) {
+    case 'no_context':
+      return 'No passage in the document matched the question closely enough to support an answer.';
+    case 'uncalibrated':
+      return 'The evidence threshold was unavailable, so the answer was withheld.';
+    case 'low_score':
+      return 'The best passage scored below the calibrated threshold, so the answer was withheld.';
+    default:
+      return 'The retrieved passages did not support a reliable answer, so it was withheld.';
+  }
 }
 
 function RefusalCard({ answer }: { answer: AskResponse }) {
   return (
     <div className="refusal" data-testid="refusal">
-      <p className="refusal-kicker">Calibrated refusal</p>
-      <h2>Insufficient evidence</h2>
-      <p>
-        {answer.reason ??
-          'The calibrated probability stayed below the fitted threshold, so no answer was generated.'}
-      </p>
-      <dl className="refusal-numbers">
-        <div>
-          <dt>refusal probability</dt>
-          <dd>{show(answer.refusal_probability)}</dd>
-        </div>
-        <div>
-          <dt>threshold</dt>
-          <dd>{show(answer.calibration.threshold, 4)}</dd>
-        </div>
-        <div>
-          <dt>decision</dt>
-          <dd>refused</dd>
-        </div>
-      </dl>
-      {answer.model_reason ? (
-        <p className="muted">{answer.model_reason}</p>
-      ) : null}
+      <p className="eyebrow">No supported answer</p>
+      <h3>The document does not settle this question.</h3>
+      <p>{refusalCopy(answer.reason)}</p>
       {answer.passages.length > 0 ? (
-        <div className="competing">
-          <h3>Competing passages</h3>
+        <div className="considered">
+          <h4>Passages considered</h4>
           <ol>
             {answer.passages.map((passage, index) => (
               <li key={`${passage.chunk_id}-${index}`}>
                 <span className="passage-meta">
-                  {passage.doc_id} · p.{passage.page_no} · {passage.breadcrumb}
-                  {passage.score === null ? '' : ` · ${passage.score.toFixed(2)}`}
+                  {sourceLabel(passage)} · page {passage.page_no} ·{' '}
+                  {passage.breadcrumb}
                 </span>
                 <span>{passage.text}</span>
               </li>
@@ -132,23 +239,33 @@ function RefusalCard({ answer }: { answer: AskResponse }) {
 }
 
 function AskPage() {
-  const [question, setQuestion] = useState('');
-  const [answer, setAnswer] = useState<AskResponse | null>(null);
-  const [demoUsed, setDemoUsed] = useState(false);
+  const [question, setQuestion] = useState(DEFAULT_DEMO_QUESTION.question);
+  const [answer, setAnswer] = useState<AskResponse | null>(
+    DEFAULT_DEMO_QUESTION.answer,
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [citationRenderMiss, setCitationRenderMiss] = useState(0);
   const [missDetails, setMissDetails] = useState<string[]>([]);
-  const [fixtureCheck, setFixtureCheck] = useState<FixtureCheck | null>(null);
 
   const attemptSeq = useRef(0);
   const missedAttempts = useRef(new Set<string>());
+  const documentRef = useRef<HTMLElement | null>(null);
+  const questionRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const handleFixtureCheck = useCallback((check: FixtureCheck) => {
-    setFixtureCheck(check);
-  }, []);
+  useLayoutEffect(() => {
+    const field = questionRef.current;
+    if (!field) {
+      return;
+    }
+    field.style.height = 'auto';
+    if (field.scrollHeight > 0) {
+      const border = field.offsetHeight - field.clientHeight;
+      field.style.height = `${field.scrollHeight + border}px`;
+    }
+  }, [question]);
 
   const handleMiss = useCallback((attemptId: string) => {
     if (missedAttempts.current.has(attemptId)) {
@@ -159,49 +276,59 @@ function AskPage() {
     setMissDetails((details) => [...details, attemptId]);
   }, []);
 
-  const selectCitation = (citation: Citation, claimIndex: number): void => {
+  const selectCitation = (citation: Citation): void => {
     attemptSeq.current += 1;
     setSelection({
       citation,
-      claimIndex,
       attemptId: `attempt-${attemptSeq.current}`,
     });
+    const column = documentRef.current;
+    if (column) {
+      const bounds = column.getBoundingClientRect();
+      const narrow =
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(max-width: 1023px)').matches;
+      if (narrow || bounds.top < 0 || bounds.bottom < 120) {
+        column.scrollIntoView({ block: 'start', behavior: 'auto' });
+      }
+    }
   };
 
-  const presentAnswer = (next: AskResponse, fromDemo: boolean): void => {
+  const presentAnswer = (next: AskResponse): void => {
     attemptSeq.current = 0;
     missedAttempts.current.clear();
     setCitationRenderMiss(0);
     setMissDetails([]);
     setAnswer(next);
-    setDemoUsed(fromDemo);
     setError(null);
-    const firstCitation = next.claims[0]?.citations[0];
-    setSelection(
-      firstCitation
-        ? { citation: firstCitation, claimIndex: 0, attemptId: 'initial-selection' }
-        : null,
-    );
+    setSelection(null);
+  };
+
+  const loadExample = (example: DemoQuestion): void => {
+    setQuestion(example.question);
+    presentAnswer(example.answer);
   };
 
   const run = async (text: string): Promise<void> => {
+    const recorded = demoForQuestion(text);
+    if (recorded) {
+      presentAnswer(recorded.answer);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setAnswer(null);
     setSelection(null);
     try {
       const response = await askQuestion(text);
-      presentAnswer(response, false);
+      presentAnswer(response);
     } catch (cause) {
-      if (demoMatches(text)) {
-        presentAnswer(DEMO_ANSWER, true);
-      } else {
-        setError(
-          cause instanceof Error
-            ? cause.message
-            : 'The request to the API failed.',
-        );
-      }
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'The answer service could not be reached.',
+      );
     } finally {
       setLoading(false);
     }
@@ -216,202 +343,196 @@ function AskPage() {
     void run(text);
   };
 
-  const loadDemo = (): void => {
-    setQuestion(DEMO_ANSWER.question);
-    presentAnswer(DEMO_ANSWER, true);
+  const handleQuestionKeyDown = (
+    event: KeyboardEvent<HTMLTextAreaElement>,
+  ): void => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
   };
 
+  const sources = useMemo(() => collectSources(answer), [answer]);
+  const sourceNumbers = useMemo(
+    () =>
+      new Map(
+        sources.map((entry) => [citationKey(entry.citation), entry.number]),
+      ),
+    [sources],
+  );
+
+  const selectedKey = selection ? citationKey(selection.citation) : null;
+  const selectedNumber = selection
+    ? (sourceNumbers.get(citationKey(selection.citation)) ?? null)
+    : null;
   const renderableCitation =
-    selection && selection.citation.doc_id === FIXTURE_DOC_ID
+    selection && selection.citation.doc_id === DEMO_PAPER.doc_id
       ? selection.citation
       : null;
   const trace = answer?.trace ?? null;
 
   return (
-    <main className="workbench">
-      <section className="answer-pane" aria-label="Answer">
-        <div className="page-head">
-          <p className="eyebrow">Ask the corpus</p>
-          <h1>An answer where every claim points at a page.</h1>
-          <p className="lede">
-            Ask a question, click a claim, and the PDF pane resolves the quoted
-            span. The trace drawer shows the retrieval path and the refusal
-            number behind the answer.
-          </p>
+    <main className="workspace">
+      <section
+        className="document-column"
+        aria-label="Document workspace"
+        ref={documentRef}
+      >
+        <div className="document-heading">
+          <h1>{DEMO_PAPER.title}</h1>
+          <p className="document-meta">{DEMO_PAPER.page_count} pages</p>
         </div>
-
-        <form className="ask-form" onSubmit={handleAsk}>
-          <label htmlFor="question">Question</label>
-          <div className="ask-row">
-            <input
-              id="question"
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              placeholder="e.g. How does hybrid retrieval find a rare term?"
-              autoComplete="off"
-              disabled={loading}
-            />
-            <button type="submit" disabled={loading || question.trim().length === 0}>
-              {loading ? 'Asking…' : 'Ask'}
-            </button>
-          </div>
-          <div className="ask-actions">
-            <button type="button" className="ghost" onClick={loadDemo}>
-              Load offline demo
-            </button>
-            <span className="muted">POST /api/ask → 127.0.0.1:8788</span>
-          </div>
-        </form>
-
-        {demoUsed ? (
-          <p className="demo-note" data-testid="demo-note">
-            {DEMO_ANSWER.demo_note}
-          </p>
-        ) : null}
-
-        {error ? (
-          <div className="error-banner" role="alert">
-            <strong>The API did not answer.</strong>
-            <span>{error}</span>
-            <span className="muted">
-              Start the API on port 8788, or use the offline demo above.
-            </span>
-          </div>
-        ) : null}
-
-        {loading ? <p className="empty">Retrieving and validating…</p> : null}
-
-        {!answer && !error && !loading ? (
-          <div className="intro-card">
-            <h2>What this shows</h2>
-            <ul>
-              <li>
-                Hybrid retrieval: vector top-20 ⊕ lexical top-20, fused with
-                RRF, reranked, then capped at eight passages.
-              </li>
-              <li>
-                Validation: a claim without a known citation, or whose quote is
-                not in the cited chunk, never reaches this pane.
-              </li>
-              <li>
-                Rendering: the quote is found in the PDF.js text layer and
-                highlighted; stored rectangles are the fallback.
-              </li>
-            </ul>
-          </div>
-        ) : null}
-
-        {answer ? (
-          <div className="answer-meta">
-            <span className="chip">{answer.model}</span>
-            <span className="chip">{answer.structured_output}</span>
-            <span className="chip">
-              refusal p = {show(answer.refusal_probability)}
-            </span>
-            {answer.calibration.threshold !== null ? (
-              <span className="chip">
-                threshold {show(answer.calibration.threshold, 4)}
-              </span>
-            ) : null}
-            {answer.uncalibrated ? (
-              <span className="chip warning">uncalibrated</span>
-            ) : null}
-          </div>
-        ) : null}
-
-        {answer?.insufficient_evidence ? <RefusalCard answer={answer} /> : null}
-
-        {answer && !answer.insufficient_evidence ? (
-          answer.claims.length > 0 ? (
-            <ol className="claims" aria-label="Answer claims">
-              {answer.claims.map((claim, claimIndex) => (
-                <li
-                  key={`${claimIndex}-${claim.text.slice(0, 24)}`}
-                  className={
-                    selection?.claimIndex === claimIndex
-                      ? 'claim selected'
-                      : 'claim'
-                  }
-                >
-                  <button
-                    type="button"
-                    className="claim-text"
-                    onClick={() => {
-                      const first = claim.citations[0];
-                      if (first) {
-                        selectCitation(first, claimIndex);
-                      }
-                    }}
-                  >
-                    {claim.text}
-                  </button>
-                  <CitationChips
-                    citations={claim.citations}
-                    selection={selection}
-                    onSelect={(citation) =>
-                      selectCitation(citation, claimIndex)
-                    }
-                  />
-                </li>
-              ))}
-            </ol>
-          ) : (
-            <div className="error-banner" role="alert">
-              <strong>No claim survived validation.</strong>
-              <span>
-                {answer.validation.claims_returned} claim(s) returned; see the
-                validation strip in the trace drawer.
-              </span>
-            </div>
-          )
-        ) : null}
-
-        {answer ? (
-          <p className="calibration-note">
-            Refusal calibrated on fit set{' '}
-            <code>{answer.calibration.fit_set_sha256?.slice(0, 12) ?? '—'}</code>
-            {answer.calibration.uncalibrated
-              ? ' · uncalibrated fallback in use'
-              : ''}
-          </p>
-        ) : null}
-      </section>
-
-      <div className="pdf-column">
         {selection && renderableCitation === null ? (
           <p className="doc-note">
-            The cited document <code>{selection.citation.doc_id}</code> is not
-            the committed fixture, so this build cannot render its PDF. The
-            quote still resolved server-side; <code>rects[]</code> are stored
-            against the source page.
+            This citation names a document that is not open in the workspace, so
+            its page cannot be shown here. The quote still resolved against the
+            source page on the server.
           </p>
         ) : null}
         <PdfPane
-          pdfUrl="/fixtures/fixture-corpus.pdf"
+          pdfUrl={DEMO_PAPER.pdf}
           citation={renderableCitation}
+          citationNumber={selectedNumber}
           attemptId={selection?.attemptId ?? ''}
           onMiss={handleMiss}
-          onFixtureCheck={handleFixtureCheck}
         />
-      </div>
+      </section>
 
-      <button
-        type="button"
-        className={drawerOpen ? 'trace-toggle open' : 'trace-toggle'}
-        aria-expanded={drawerOpen}
-        onClick={() => setDrawerOpen((open) => !open)}
-        data-testid="trace-toggle"
-      >
-        {drawerOpen ? 'Hide retrieval trace' : 'Show retrieval trace'}
-        {trace ? ` · ${trace.rerank_hits.length} reranked` : ''}
-      </button>
+      <section className="answer-pane" aria-labelledby="ask-heading">
+        <header className="ask-head">
+          <h2 id="ask-heading">Ask the document.</h2>
+        </header>
+
+        <form className="ask-form" onSubmit={handleAsk}>
+          <label htmlFor="question" className="visually-hidden">
+            Question
+          </label>
+          <div className="ask-row">
+            <textarea
+              id="question"
+              ref={questionRef}
+              value={question}
+              rows={2}
+              onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={handleQuestionKeyDown}
+              placeholder="What does the paper say about…"
+              autoComplete="off"
+              disabled={loading}
+            />
+            <button type="submit" className="primary" disabled={loading}>
+              {loading ? 'Asking…' : 'Ask'}
+            </button>
+          </div>
+        </form>
+
+        <ExampleQuestions onChoose={loadExample} />
+
+        {error ? (
+          <div className="error-banner" role="alert">
+            <strong>The answer service did not respond.</strong>
+            <span>{error}</span>
+            <span className="muted">
+              Choose one of the example questions, or start the local service.
+            </span>
+          </div>
+        ) : null}
+
+        {loading ? (
+          <div className="loading-state" role="status" aria-live="polite">
+            <span className="loading-rule" aria-hidden="true" />
+            <p>
+              Searching the document for relevant passages, then checking each
+              quote against the page.
+            </p>
+          </div>
+        ) : null}
+
+        {answer ? (
+          <section
+            className="answer-result"
+            aria-live="polite"
+            aria-label="Answer"
+          >
+            <header className="answer-heading">
+              <p className="eyebrow">Answer</p>
+            </header>
+
+            {answer.insufficient_evidence ? (
+              <RefusalCard answer={answer} />
+            ) : answer.claims.length > 0 ? (
+              <>
+                <ol className="claims" aria-label="Answer claims">
+                  {answer.claims.map((claim, claimIndex) => (
+                    <li
+                      key={`${claimIndex}-${claim.text.slice(0, 24)}`}
+                      className="claim"
+                    >
+                      <p className="claim-text">
+                        {claim.text}
+                        {claim.citations.map((citation) => {
+                          const number =
+                            sourceNumbers.get(citationKey(citation)) ?? 0;
+                          return (
+                            <CitationMark
+                              key={citationKey(citation)}
+                              citation={citation}
+                              number={number}
+                              selected={selectedKey === citationKey(citation)}
+                              onSelect={() => selectCitation(citation)}
+                            />
+                          );
+                        })}
+                      </p>
+                    </li>
+                  ))}
+                </ol>
+
+                <Sources
+                  sources={sources}
+                  selectedKey={selectedKey}
+                  onSelect={selectCitation}
+                />
+              </>
+            ) : (
+              <div className="error-banner" role="alert">
+                <strong>No claim passed the citation check.</strong>
+                <span>
+                  {answer.validation.claims_returned} claim
+                  {answer.validation.claims_returned === 1 ? '' : 's'} came back;
+                  open the retrieval trail to see why each was removed.
+                </span>
+              </div>
+            )}
+          </section>
+        ) : null}
+
+        <section className="trail-bar" aria-labelledby="trail-heading">
+          <div>
+            <p className="eyebrow">Retrieval trail</p>
+            <h3 id="trail-heading">How this answer was assembled</h3>
+            <p>
+              {trace
+                ? `${trace.vector_hits.length} meaning matches, ${trace.lexical_hits.length} keyword matches, ${trace.rerank_hits.length} rescored, ${trace.context_chunk_ids.length} passages sent.`
+                : 'Run a question to see the passages found, how they were ranked, and the evidence check.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="secondary"
+            aria-expanded={drawerOpen}
+            onClick={() => setDrawerOpen((open) => !open)}
+            data-testid="trace-toggle"
+          >
+            {drawerOpen ? 'Close trail' : 'Open trail'}
+          </button>
+        </section>
+      </section>
 
       <TraceDrawer
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         answer={answer}
         citationRenderMiss={citationRenderMiss}
-        fixtureCheck={fixtureCheck}
         missDetails={missDetails}
       />
     </main>
@@ -422,7 +543,7 @@ export default function App() {
   const onEval = isEvalRoute();
   return (
     <div className="app">
-      <TopBar onEval={onEval} />
+      <SiteHeader onEval={onEval} />
       {onEval ? <EvalPage /> : <AskPage />}
     </div>
   );

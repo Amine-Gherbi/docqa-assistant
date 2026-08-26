@@ -1,4 +1,4 @@
-# docqa-assistant UI
+# Marginalia UI
 
 Ask a question about the commit-pinned PDF fixture and get an answer whose
 claims point at highlighted spans, with the retrieval trace and refusal number

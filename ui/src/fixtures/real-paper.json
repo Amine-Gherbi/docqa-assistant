@@ -1,0 +1,811 @@
+{
+  "doc_id": "sentence-bert",
+  "title": "Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks",
+  "pdf": "/papers/sentence-bert.pdf",
+  "source": "arXiv:1908.10084v1",
+  "page_count": 11,
+  "generated_with": "pdfjs-dist getTextContent({disableNormalization:true}) from data/corpus/1908.10084v1.pdf; every quote re-checked by ui/scripts/verify_demo_paper.mjs",
+  "questions": [
+    {
+      "question": "Why is SBERT more efficient than a BERT cross-encoder?",
+      "answer": {
+        "claims": [
+          {
+            "text": "BERT requires that both sentences are fed into the network.",
+            "citations": [
+              {
+                "chunk_id": 101,
+                "doc_id": "sentence-bert",
+                "page_no": 1,
+                "char_start": 427,
+                "char_end": 483,
+                "page_text_sha256": "994dac905a47fa79f59c9255a275a0ae465f9a8ad92aa72df5fca6b3de45d378",
+                "quote": "it requires that both sentences are fed into the network"
+              }
+            ]
+          },
+          {
+            "text": "SBERT reduces finding the most similar sentence pair among 10,000 sentences from 65 hours with BERT to about 5 seconds.",
+            "citations": [
+              {
+                "chunk_id": 102,
+                "doc_id": "sentence-bert",
+                "page_no": 2,
+                "char_start": 0,
+                "char_end": 170,
+                "page_text_sha256": "26c642483388babd1fa78f1443d98fc43010d2ca609aa80bac26826b6f03a40d",
+                "quote": "most similar sentence pair in a collection of 10,000 sentences is reduced from 65 hours with BERT to the computation of 10,000 sentence embeddings (~5 seconds with SBERT)"
+              }
+            ]
+          },
+          {
+            "text": "On a GPU, SBERT is about 9% faster than InferSent and about 55% faster than Universal Sentence Encoder.",
+            "citations": [
+              {
+                "chunk_id": 103,
+                "doc_id": "sentence-bert",
+                "page_no": 8,
+                "char_start": 3777,
+                "char_end": 3867,
+                "page_text_sha256": "7b040c4fc14e0a94aa5f29b5e96614153e6aeae983c65f3a19e575ca6c57a0f9",
+                "quote": "it is about 9% faster than InferSent and about 55% faster than Universal Sentence Encoder."
+              }
+            ]
+          }
+        ],
+        "insufficient_evidence": false,
+        "reason": null,
+        "passages": [
+          {
+            "chunk_id": 101,
+            "doc_id": "sentence-bert",
+            "page_no": 1,
+            "breadcrumb": "Abstract",
+            "text": "it requires that both sentences are fed into the network",
+            "score": 8.1
+          },
+          {
+            "chunk_id": 102,
+            "doc_id": "sentence-bert",
+            "page_no": 2,
+            "breadcrumb": "1 Introduction",
+            "text": "most similar sentence pair in a collection of 10,000 sentences is reduced from 65 hours with BERT to the computation of 10,000 sentence embeddings (~5 seconds with SBERT)",
+            "score": 6.9
+          },
+          {
+            "chunk_id": 103,
+            "doc_id": "sentence-bert",
+            "page_no": 8,
+            "breadcrumb": "8 Conclusion",
+            "text": "it is about 9% faster than InferSent and about 55% faster than Universal Sentence Encoder.",
+            "score": 5.8
+          }
+        ],
+        "model": "Recorded extractive demo",
+        "structured_output": "extractive",
+        "validation": {
+          "claims_returned": 3,
+          "claims_kept": 3,
+          "dropped_uncited": 0,
+          "dropped_unknown_citation": 0,
+          "dropped_quote_mismatch": 0,
+          "dropped_bad_quote": 0,
+          "schema_failures": 0,
+          "repair_turns": 0,
+          "claims_dropped": 0
+        },
+        "refusal_probability": 0.74,
+        "calibration": {
+          "fit_set_sha256": "52278766f27bd7bc78726da5b4a1afb6e2858e8a159abb9f0fca63dfe0275a21",
+          "a": 0.5735792838988321,
+          "b": -4.849528428838639,
+          "threshold": 0.2552458157056597,
+          "uncalibrated": false,
+          "provenance": "offline extractive demo; recorded passages"
+        },
+        "uncalibrated": false,
+        "model_reason": null,
+        "citation_render_miss": 0,
+        "trace": {
+          "mode": "hybrid_rerank",
+          "embedder": "bge-small-en-v1.5 (recorded passages)",
+          "reranker": "ms-marco-MiniLM-L-6-v2 (recorded ranking)",
+          "vector_hits": [
+            {
+              "chunk_id": 101,
+              "doc_id": "sentence-bert",
+              "page_no": 1,
+              "breadcrumb": "Abstract",
+              "preview": "it requires that both sentences are fed into the network",
+              "rank": 1,
+              "cosine_distance": 0.18
+            },
+            {
+              "chunk_id": 102,
+              "doc_id": "sentence-bert",
+              "page_no": 2,
+              "breadcrumb": "1 Introduction",
+              "preview": "most similar sentence pair in a collection of 10,000 sentences is reduced from 65 hours with BERT to the computation of 10,000 sentence embeddings (~5 seconds with SBERT)",
+              "rank": 2,
+              "cosine_distance": 0.227
+            },
+            {
+              "chunk_id": 103,
+              "doc_id": "sentence-bert",
+              "page_no": 8,
+              "breadcrumb": "8 Conclusion",
+              "preview": "it is about 9% faster than InferSent and about 55% faster than Universal Sentence Encoder.",
+              "rank": 3,
+              "cosine_distance": 0.274
+            }
+          ],
+          "lexical_hits": [
+            {
+              "chunk_id": 101,
+              "doc_id": "sentence-bert",
+              "page_no": 1,
+              "breadcrumb": "Abstract",
+              "preview": "it requires that both sentences are fed into the network",
+              "rank": 1,
+              "ts_rank_cd": 0.64
+            },
+            {
+              "chunk_id": 102,
+              "doc_id": "sentence-bert",
+              "page_no": 2,
+              "breadcrumb": "1 Introduction",
+              "preview": "most similar sentence pair in a collection of 10,000 sentences is reduced from 65 hours with BERT to the computation of 10,000 sentence embeddings (~5 seconds with SBERT)",
+              "rank": 2,
+              "ts_rank_cd": 0.53
+            },
+            {
+              "chunk_id": 103,
+              "doc_id": "sentence-bert",
+              "page_no": 8,
+              "breadcrumb": "8 Conclusion",
+              "preview": "it is about 9% faster than InferSent and about 55% faster than Universal Sentence Encoder.",
+              "rank": 3,
+              "ts_rank_cd": 0.42
+            }
+          ],
+          "fusion_hits": [
+            {
+              "chunk_id": 101,
+              "doc_id": "sentence-bert",
+              "page_no": 1,
+              "breadcrumb": "Abstract",
+              "preview": "it requires that both sentences are fed into the network",
+              "rrf_rank": 1,
+              "rrf_score": 0.0325,
+              "vector_rank": 1,
+              "lexical_rank": 1,
+              "rerank_rank": 1,
+              "rank_delta": 0
+            },
+            {
+              "chunk_id": 102,
+              "doc_id": "sentence-bert",
+              "page_no": 2,
+              "breadcrumb": "1 Introduction",
+              "preview": "most similar sentence pair in a collection of 10,000 sentences is reduced from 65 hours with BERT to the computation of 10,000 sentence embeddings (~5 seconds with SBERT)",
+              "rrf_rank": 2,
+              "rrf_score": 0.0316,
+              "vector_rank": 2,
+              "lexical_rank": 2,
+              "rerank_rank": 2,
+              "rank_delta": 0
+            },
+            {
+              "chunk_id": 103,
+              "doc_id": "sentence-bert",
+              "page_no": 8,
+              "breadcrumb": "8 Conclusion",
+              "preview": "it is about 9% faster than InferSent and about 55% faster than Universal Sentence Encoder.",
+              "rrf_rank": 3,
+              "rrf_score": 0.0307,
+              "vector_rank": 3,
+              "lexical_rank": 3,
+              "rerank_rank": 3,
+              "rank_delta": 0
+            }
+          ],
+          "rerank_hits": [
+            {
+              "chunk_id": 101,
+              "doc_id": "sentence-bert",
+              "page_no": 1,
+              "breadcrumb": "Abstract",
+              "preview": "it requires that both sentences are fed into the network",
+              "rerank_rank": 1,
+              "rrf_rank": 1,
+              "rrf_score": 0.0325,
+              "vector_rank": 1,
+              "lexical_rank": 1,
+              "rerank_score": 8.1,
+              "kept": true,
+              "calibrated_probability": 0.74
+            },
+            {
+              "chunk_id": 102,
+              "doc_id": "sentence-bert",
+              "page_no": 2,
+              "breadcrumb": "1 Introduction",
+              "preview": "most similar sentence pair in a collection of 10,000 sentences is reduced from 65 hours with BERT to the computation of 10,000 sentence embeddings (~5 seconds with SBERT)",
+              "rerank_rank": 2,
+              "rrf_rank": 2,
+              "rrf_score": 0.0316,
+              "vector_rank": 2,
+              "lexical_rank": 2,
+              "rerank_score": 6.9,
+              "kept": true,
+              "calibrated_probability": 0.62
+            },
+            {
+              "chunk_id": 103,
+              "doc_id": "sentence-bert",
+              "page_no": 8,
+              "breadcrumb": "8 Conclusion",
+              "preview": "it is about 9% faster than InferSent and about 55% faster than Universal Sentence Encoder.",
+              "rerank_rank": 3,
+              "rrf_rank": 3,
+              "rrf_score": 0.0307,
+              "vector_rank": 3,
+              "lexical_rank": 3,
+              "rerank_score": 5.8,
+              "kept": true,
+              "calibrated_probability": 0.5
+            }
+          ],
+          "context_chunk_ids": [
+            101,
+            102,
+            103
+          ],
+          "context_tokens": 1180,
+          "refusal": {
+            "top_rerank_score": 8.1,
+            "top_probability": 0.74,
+            "threshold": 0.2552458157056597,
+            "decision": "answered",
+            "reason": null,
+            "uncalibrated": false
+          }
+        }
+      }
+    },
+    {
+      "question": "How does SBERT derive and train sentence embeddings?",
+      "answer": {
+        "claims": [
+          {
+            "text": "SBERT adds a pooling operation to the output of BERT or RoBERTa to derive a fixed-size sentence embedding.",
+            "citations": [
+              {
+                "chunk_id": 201,
+                "doc_id": "sentence-bert",
+                "page_no": 3,
+                "char_start": 993,
+                "char_end": 1055,
+                "page_text_sha256": "25be865e69479d7c99a033fb339bef26fb8ce4b8fb6a64776f38e6e790afa1df",
+                "quote": "SBERT adds a pooling operation to the output of BERT / RoBERTa"
+              }
+            ]
+          },
+          {
+            "text": "Training updates the weights so that the produced sentence embeddings are semantically meaningful.",
+            "citations": [
+              {
+                "chunk_id": 202,
+                "doc_id": "sentence-bert",
+                "page_no": 3,
+                "char_start": 1447,
+                "char_end": 1539,
+                "page_text_sha256": "25be865e69479d7c99a033fb339bef26fb8ce4b8fb6a64776f38e6e790afa1df",
+                "quote": "to update the weights such that the produced sentence embeddings are semantically meaningful"
+              }
+            ]
+          },
+          {
+            "text": "The classification objective applies a softmax to u, v and their element-wise difference.",
+            "citations": [
+              {
+                "chunk_id": 203,
+                "doc_id": "sentence-bert",
+                "page_no": 3,
+                "char_start": 2127,
+                "char_end": 2157,
+                "page_text_sha256": "25be865e69479d7c99a033fb339bef26fb8ce4b8fb6a64776f38e6e790afa1df",
+                "quote": "o = softmax(Wt(u, v, |u − v|))"
+              }
+            ]
+          }
+        ],
+        "insufficient_evidence": false,
+        "reason": null,
+        "passages": [
+          {
+            "chunk_id": 201,
+            "doc_id": "sentence-bert",
+            "page_no": 3,
+            "breadcrumb": "3 Model",
+            "text": "SBERT adds a pooling operation to the output of BERT / RoBERTa",
+            "score": 8.1
+          },
+          {
+            "chunk_id": 202,
+            "doc_id": "sentence-bert",
+            "page_no": 3,
+            "breadcrumb": "3 Model",
+            "text": "to update the weights such that the produced sentence embeddings are semantically meaningful",
+            "score": 6.9
+          },
+          {
+            "chunk_id": 203,
+            "doc_id": "sentence-bert",
+            "page_no": 3,
+            "breadcrumb": "3 Model",
+            "text": "o = softmax(Wt(u, v, |u − v|))",
+            "score": 5.8
+          }
+        ],
+        "model": "Recorded extractive demo",
+        "structured_output": "extractive",
+        "validation": {
+          "claims_returned": 3,
+          "claims_kept": 3,
+          "dropped_uncited": 0,
+          "dropped_unknown_citation": 0,
+          "dropped_quote_mismatch": 0,
+          "dropped_bad_quote": 0,
+          "schema_failures": 0,
+          "repair_turns": 0,
+          "claims_dropped": 0
+        },
+        "refusal_probability": 0.74,
+        "calibration": {
+          "fit_set_sha256": "52278766f27bd7bc78726da5b4a1afb6e2858e8a159abb9f0fca63dfe0275a21",
+          "a": 0.5735792838988321,
+          "b": -4.849528428838639,
+          "threshold": 0.2552458157056597,
+          "uncalibrated": false,
+          "provenance": "offline extractive demo; recorded passages"
+        },
+        "uncalibrated": false,
+        "model_reason": null,
+        "citation_render_miss": 0,
+        "trace": {
+          "mode": "hybrid_rerank",
+          "embedder": "bge-small-en-v1.5 (recorded passages)",
+          "reranker": "ms-marco-MiniLM-L-6-v2 (recorded ranking)",
+          "vector_hits": [
+            {
+              "chunk_id": 201,
+              "doc_id": "sentence-bert",
+              "page_no": 3,
+              "breadcrumb": "3 Model",
+              "preview": "SBERT adds a pooling operation to the output of BERT / RoBERTa",
+              "rank": 1,
+              "cosine_distance": 0.18
+            },
+            {
+              "chunk_id": 202,
+              "doc_id": "sentence-bert",
+              "page_no": 3,
+              "breadcrumb": "3 Model",
+              "preview": "to update the weights such that the produced sentence embeddings are semantically meaningful",
+              "rank": 2,
+              "cosine_distance": 0.227
+            },
+            {
+              "chunk_id": 203,
+              "doc_id": "sentence-bert",
+              "page_no": 3,
+              "breadcrumb": "3 Model",
+              "preview": "o = softmax(Wt(u, v, |u − v|))",
+              "rank": 3,
+              "cosine_distance": 0.274
+            }
+          ],
+          "lexical_hits": [
+            {
+              "chunk_id": 201,
+              "doc_id": "sentence-bert",
+              "page_no": 3,
+              "breadcrumb": "3 Model",
+              "preview": "SBERT adds a pooling operation to the output of BERT / RoBERTa",
+              "rank": 1,
+              "ts_rank_cd": 0.64
+            },
+            {
+              "chunk_id": 202,
+              "doc_id": "sentence-bert",
+              "page_no": 3,
+              "breadcrumb": "3 Model",
+              "preview": "to update the weights such that the produced sentence embeddings are semantically meaningful",
+              "rank": 2,
+              "ts_rank_cd": 0.53
+            },
+            {
+              "chunk_id": 203,
+              "doc_id": "sentence-bert",
+              "page_no": 3,
+              "breadcrumb": "3 Model",
+              "preview": "o = softmax(Wt(u, v, |u − v|))",
+              "rank": 3,
+              "ts_rank_cd": 0.42
+            }
+          ],
+          "fusion_hits": [
+            {
+              "chunk_id": 201,
+              "doc_id": "sentence-bert",
+              "page_no": 3,
+              "breadcrumb": "3 Model",
+              "preview": "SBERT adds a pooling operation to the output of BERT / RoBERTa",
+              "rrf_rank": 1,
+              "rrf_score": 0.0325,
+              "vector_rank": 1,
+              "lexical_rank": 1,
+              "rerank_rank": 1,
+              "rank_delta": 0
+            },
+            {
+              "chunk_id": 202,
+              "doc_id": "sentence-bert",
+              "page_no": 3,
+              "breadcrumb": "3 Model",
+              "preview": "to update the weights such that the produced sentence embeddings are semantically meaningful",
+              "rrf_rank": 2,
+              "rrf_score": 0.0316,
+              "vector_rank": 2,
+              "lexical_rank": 2,
+              "rerank_rank": 2,
+              "rank_delta": 0
+            },
+            {
+              "chunk_id": 203,
+              "doc_id": "sentence-bert",
+              "page_no": 3,
+              "breadcrumb": "3 Model",
+              "preview": "o = softmax(Wt(u, v, |u − v|))",
+              "rrf_rank": 3,
+              "rrf_score": 0.0307,
+              "vector_rank": 3,
+              "lexical_rank": 3,
+              "rerank_rank": 3,
+              "rank_delta": 0
+            }
+          ],
+          "rerank_hits": [
+            {
+              "chunk_id": 201,
+              "doc_id": "sentence-bert",
+              "page_no": 3,
+              "breadcrumb": "3 Model",
+              "preview": "SBERT adds a pooling operation to the output of BERT / RoBERTa",
+              "rerank_rank": 1,
+              "rrf_rank": 1,
+              "rrf_score": 0.0325,
+              "vector_rank": 1,
+              "lexical_rank": 1,
+              "rerank_score": 8.1,
+              "kept": true,
+              "calibrated_probability": 0.74
+            },
+            {
+              "chunk_id": 202,
+              "doc_id": "sentence-bert",
+              "page_no": 3,
+              "breadcrumb": "3 Model",
+              "preview": "to update the weights such that the produced sentence embeddings are semantically meaningful",
+              "rerank_rank": 2,
+              "rrf_rank": 2,
+              "rrf_score": 0.0316,
+              "vector_rank": 2,
+              "lexical_rank": 2,
+              "rerank_score": 6.9,
+              "kept": true,
+              "calibrated_probability": 0.62
+            },
+            {
+              "chunk_id": 203,
+              "doc_id": "sentence-bert",
+              "page_no": 3,
+              "breadcrumb": "3 Model",
+              "preview": "o = softmax(Wt(u, v, |u − v|))",
+              "rerank_rank": 3,
+              "rrf_rank": 3,
+              "rrf_score": 0.0307,
+              "vector_rank": 3,
+              "lexical_rank": 3,
+              "rerank_score": 5.8,
+              "kept": true,
+              "calibrated_probability": 0.5
+            }
+          ],
+          "context_chunk_ids": [
+            201,
+            202,
+            203
+          ],
+          "context_tokens": 1180,
+          "refusal": {
+            "top_rerank_score": 8.1,
+            "top_probability": 0.74,
+            "threshold": 0.2552458157056597,
+            "decision": "answered",
+            "reason": null,
+            "uncalibrated": false
+          }
+        }
+      }
+    },
+    {
+      "question": "How does BERT compare with SBERT on semantic textual similarity?",
+      "answer": {
+        "claims": [
+          {
+            "text": "Directly using the output of BERT leads to rather poor performances.",
+            "citations": [
+              {
+                "chunk_id": 301,
+                "doc_id": "sentence-bert",
+                "page_no": 4,
+                "char_start": 2928,
+                "char_end": 3019,
+                "page_text_sha256": "0ff7b9383fab4920df557b4dfe0e8cf10c988fa7f171c1abd55291fc17df25fd",
+                "quote": "The results shows that directly using the output of BERT leads to rather poor performances."
+              }
+            ]
+          },
+          {
+            "text": "Averaged BERT embeddings and the CLS token are both worse than average GloVe embeddings.",
+            "citations": [
+              {
+                "chunk_id": 302,
+                "doc_id": "sentence-bert",
+                "page_no": 4,
+                "char_start": 3180,
+                "char_end": 3235,
+                "page_text_sha256": "0ff7b9383fab4920df557b4dfe0e8cf10c988fa7f171c1abd55291fc17df25fd",
+                "quote": "Both are worse than computing average GloVe embeddings."
+              }
+            ]
+          },
+          {
+            "text": "Training first on NLI and then on STSb gives a slight improvement of 1-2 points.",
+            "citations": [
+              {
+                "chunk_id": 303,
+                "doc_id": "sentence-bert",
+                "page_no": 5,
+                "char_start": 1328,
+                "char_end": 1407,
+                "page_text_sha256": "0859064455164728789e86344b6bd39d65f8031d0e38b0b5a68a334ae241b088",
+                "quote": "We observe that the later strategy leads to a slight improvement of 1-2 points."
+              }
+            ]
+          }
+        ],
+        "insufficient_evidence": false,
+        "reason": null,
+        "passages": [
+          {
+            "chunk_id": 301,
+            "doc_id": "sentence-bert",
+            "page_no": 4,
+            "breadcrumb": "4.1 Unsupervised STS",
+            "text": "The results shows that directly using the output of BERT leads to rather poor performances.",
+            "score": 8.1
+          },
+          {
+            "chunk_id": 302,
+            "doc_id": "sentence-bert",
+            "page_no": 4,
+            "breadcrumb": "4.1 Unsupervised STS",
+            "text": "Both are worse than computing average GloVe embeddings.",
+            "score": 6.9
+          },
+          {
+            "chunk_id": 303,
+            "doc_id": "sentence-bert",
+            "page_no": 5,
+            "breadcrumb": "4.2 Supervised STS",
+            "text": "We observe that the later strategy leads to a slight improvement of 1-2 points.",
+            "score": 5.8
+          }
+        ],
+        "model": "Recorded extractive demo",
+        "structured_output": "extractive",
+        "validation": {
+          "claims_returned": 3,
+          "claims_kept": 3,
+          "dropped_uncited": 0,
+          "dropped_unknown_citation": 0,
+          "dropped_quote_mismatch": 0,
+          "dropped_bad_quote": 0,
+          "schema_failures": 0,
+          "repair_turns": 0,
+          "claims_dropped": 0
+        },
+        "refusal_probability": 0.74,
+        "calibration": {
+          "fit_set_sha256": "52278766f27bd7bc78726da5b4a1afb6e2858e8a159abb9f0fca63dfe0275a21",
+          "a": 0.5735792838988321,
+          "b": -4.849528428838639,
+          "threshold": 0.2552458157056597,
+          "uncalibrated": false,
+          "provenance": "offline extractive demo; recorded passages"
+        },
+        "uncalibrated": false,
+        "model_reason": null,
+        "citation_render_miss": 0,
+        "trace": {
+          "mode": "hybrid_rerank",
+          "embedder": "bge-small-en-v1.5 (recorded passages)",
+          "reranker": "ms-marco-MiniLM-L-6-v2 (recorded ranking)",
+          "vector_hits": [
+            {
+              "chunk_id": 301,
+              "doc_id": "sentence-bert",
+              "page_no": 4,
+              "breadcrumb": "4.1 Unsupervised STS",
+              "preview": "The results shows that directly using the output of BERT leads to rather poor performances.",
+              "rank": 1,
+              "cosine_distance": 0.18
+            },
+            {
+              "chunk_id": 302,
+              "doc_id": "sentence-bert",
+              "page_no": 4,
+              "breadcrumb": "4.1 Unsupervised STS",
+              "preview": "Both are worse than computing average GloVe embeddings.",
+              "rank": 2,
+              "cosine_distance": 0.227
+            },
+            {
+              "chunk_id": 303,
+              "doc_id": "sentence-bert",
+              "page_no": 5,
+              "breadcrumb": "4.2 Supervised STS",
+              "preview": "We observe that the later strategy leads to a slight improvement of 1-2 points.",
+              "rank": 3,
+              "cosine_distance": 0.274
+            }
+          ],
+          "lexical_hits": [
+            {
+              "chunk_id": 301,
+              "doc_id": "sentence-bert",
+              "page_no": 4,
+              "breadcrumb": "4.1 Unsupervised STS",
+              "preview": "The results shows that directly using the output of BERT leads to rather poor performances.",
+              "rank": 1,
+              "ts_rank_cd": 0.64
+            },
+            {
+              "chunk_id": 302,
+              "doc_id": "sentence-bert",
+              "page_no": 4,
+              "breadcrumb": "4.1 Unsupervised STS",
+              "preview": "Both are worse than computing average GloVe embeddings.",
+              "rank": 2,
+              "ts_rank_cd": 0.53
+            },
+            {
+              "chunk_id": 303,
+              "doc_id": "sentence-bert",
+              "page_no": 5,
+              "breadcrumb": "4.2 Supervised STS",
+              "preview": "We observe that the later strategy leads to a slight improvement of 1-2 points.",
+              "rank": 3,
+              "ts_rank_cd": 0.42
+            }
+          ],
+          "fusion_hits": [
+            {
+              "chunk_id": 301,
+              "doc_id": "sentence-bert",
+              "page_no": 4,
+              "breadcrumb": "4.1 Unsupervised STS",
+              "preview": "The results shows that directly using the output of BERT leads to rather poor performances.",
+              "rrf_rank": 1,
+              "rrf_score": 0.0325,
+              "vector_rank": 1,
+              "lexical_rank": 1,
+              "rerank_rank": 1,
+              "rank_delta": 0
+            },
+            {
+              "chunk_id": 302,
+              "doc_id": "sentence-bert",
+              "page_no": 4,
+              "breadcrumb": "4.1 Unsupervised STS",
+              "preview": "Both are worse than computing average GloVe embeddings.",
+              "rrf_rank": 2,
+              "rrf_score": 0.0316,
+              "vector_rank": 2,
+              "lexical_rank": 2,
+              "rerank_rank": 2,
+              "rank_delta": 0
+            },
+            {
+              "chunk_id": 303,
+              "doc_id": "sentence-bert",
+              "page_no": 5,
+              "breadcrumb": "4.2 Supervised STS",
+              "preview": "We observe that the later strategy leads to a slight improvement of 1-2 points.",
+              "rrf_rank": 3,
+              "rrf_score": 0.0307,
+              "vector_rank": 3,
+              "lexical_rank": 3,
+              "rerank_rank": 3,
+              "rank_delta": 0
+            }
+          ],
+          "rerank_hits": [
+            {
+              "chunk_id": 301,
+              "doc_id": "sentence-bert",
+              "page_no": 4,
+              "breadcrumb": "4.1 Unsupervised STS",
+              "preview": "The results shows that directly using the output of BERT leads to rather poor performances.",
+              "rerank_rank": 1,
+              "rrf_rank": 1,
+              "rrf_score": 0.0325,
+              "vector_rank": 1,
+              "lexical_rank": 1,
+              "rerank_score": 8.1,
+              "kept": true,
+              "calibrated_probability": 0.74
+            },
+            {
+              "chunk_id": 302,
+              "doc_id": "sentence-bert",
+              "page_no": 4,
+              "breadcrumb": "4.1 Unsupervised STS",
+              "preview": "Both are worse than computing average GloVe embeddings.",
+              "rerank_rank": 2,
+              "rrf_rank": 2,
+              "rrf_score": 0.0316,
+              "vector_rank": 2,
+              "lexical_rank": 2,
+              "rerank_score": 6.9,
+              "kept": true,
+              "calibrated_probability": 0.62
+            },
+            {
+              "chunk_id": 303,
+              "doc_id": "sentence-bert",
+              "page_no": 5,
+              "breadcrumb": "4.2 Supervised STS",
+              "preview": "We observe that the later strategy leads to a slight improvement of 1-2 points.",
+              "rerank_rank": 3,
+              "rrf_rank": 3,
+              "rrf_score": 0.0307,
+              "vector_rank": 3,
+              "lexical_rank": 3,
+              "rerank_score": 5.8,
+              "kept": true,
+              "calibrated_probability": 0.5
+            }
+          ],
+          "context_chunk_ids": [
+            301,
+            302,
+            303
+          ],
+          "context_tokens": 1180,
+          "refusal": {
+            "top_rerank_score": 8.1,
+            "top_probability": 0.74,
+            "threshold": 0.2552458157056597,
+            "decision": "answered",
+            "reason": null,
+            "uncalibrated": false
+          }
+        }
+      }
+    }
+  ]
+}
