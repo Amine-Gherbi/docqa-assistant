@@ -24,6 +24,9 @@ uv run docqa serve --port 8788            # terminal 1
 Set-Location ui; npx vite preview --port 5173     # terminal 2 → http://localhost:5173
 ```
 
+`./scripts/verify.sh` is a bash script: in PowerShell `bash` resolves to WSL, which has no `node` or
+`uv`. Call Git bash instead: `& 'C:/Program Files/Git/bin/bash.exe' scripts/verify.sh`.
+
 
 ## Architecture
 
