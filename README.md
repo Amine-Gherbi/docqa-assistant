@@ -14,8 +14,16 @@ uv run docqa eval                         # 30-question harness; exits 6 on a ga
 uv run docqa eval --ablate vector-only    # weakened retriever must miss a gate
 uv run docqa judge-check                  # pinned judge protocol; reliability UNVERIFIED
 uv run python scripts/capture-assets      # 4 WebP + manifest.json for the hub
-./scripts/verify.sh                       # ruff + mypy --strict + pytest (+ k6 if installed)
+./scripts/verify.sh                       # ruff + mypy --strict + pytest (k6 opt-in)
 ```
+
+The UI is a separate package. Windows PowerShell 5.1 does not accept `&&`, so use two statements:
+
+```powershell
+uv run docqa serve --port 8788            # terminal 1
+Set-Location ui; npx vite preview --port 5173     # terminal 2 → http://localhost:5173
+```
+
 
 ## Architecture
 
