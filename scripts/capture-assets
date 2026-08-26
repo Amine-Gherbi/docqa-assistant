@@ -52,7 +52,7 @@ const base = process.env.CAPTURE_BASE;
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
     deviceScaleFactor: 2,
-    colorScheme: 'dark',
+    colorScheme: 'light',
     reducedMotion: 'reduce',
   });
   const page = await context.newPage();
@@ -63,69 +63,97 @@ const base = process.env.CAPTURE_BASE;
     if (message.type() === 'error') problems.push('console: ' + message.text());
   });
 
-  async function loadDemo() {
-    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
-    await page.locator('button', { hasText: 'Load offline demo' }).click();
-    await page.waitForSelector('.claim');
+  async function waitForPage(pageNo) {
     await page.waitForFunction(
-      () => document.querySelector('[data-testid="pdf-page-no"]')?.textContent?.trim() === 'p.3',
+      (expected) =>
+        document.querySelector('[data-testid="pdf-page-no"]')?.textContent?.trim() ===
+        'Page ' + expected,
+      pageNo,
     );
-    await page.waitForFunction(
-      () => typeof CSS !== 'undefined' && CSS.highlights && CSS.highlights.has('docqa-citation'),
-      null,
-      { timeout: 15000 },
-    ).catch(() => {});
-    await page.waitForTimeout(800);
   }
 
-  await loadDemo();
-  await page.locator('[data-testid="trace-toggle"]').click();
-  await page.waitForSelector('.trace-drawer');
-  await page.waitForFunction(
-    () => (document.querySelector('.trace-drawer')?.textContent || '').includes('resolve'),
-  );
-  await page.evaluate(() => {
-    const spans = Array.from(document.querySelectorAll('.textLayer span'));
-    const hit = spans.find((span) => (span.textContent || '').toLowerCase().includes('quokka'));
-    if (hit) hit.scrollIntoView({ block: 'start' });
-    const answer = document.querySelector('.answer-pane');
-    if (answer) answer.scrollTop = 0;
-    const body = document.querySelector('.drawer-body');
-    if (body) body.scrollTop = 0;
-  });
-  await page.waitForTimeout(700);
+  async function waitForHighlight() {
+    // The key screenshot must not ship without the resolved quote highlight.
+    await page.waitForFunction(
+      () =>
+        typeof CSS !== 'undefined' &&
+        CSS.highlights &&
+        CSS.highlights.has('docqa-citation'),
+      null,
+      { timeout: 20000 },
+    );
+  }
+
+  async function settle() {
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(900);
+  }
+
+  // Hero: the document with a highlighted quote and the citation that produced
+  // it. The second citation opens page 2 and selects the matching source row.
+  await page.goto(base + '/', { waitUntil: 'networkidle' });
+  await page.waitForSelector('.claim');
+  await settle();
+  await page.locator('[data-testid="claim-citation"]').nth(1).click();
+  await waitForPage(2);
+  await waitForHighlight();
+  await settle();
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: out + '/hero.png' });
 
-  await page.goto(base + '/eval', { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(
-    () => {
-      const text = document.querySelector('.eval-page')?.textContent || '';
-      return text.includes('report loaded') || Boolean(document.querySelector('.empty-report'));
-    },
-    null,
-    { timeout: 30000 },
-  ).catch(() => {});
-  await page.waitForTimeout(600);
+  // Citation view: the second recorded question keeps every citation on page 3;
+  // selecting source 1 shows the verbatim quote in the list beside the page.
+  await page
+    .getByTestId('example-question')
+    .filter({ hasText: 'How does SBERT derive' })
+    .click();
+  await page.waitForTimeout(350);
+  await page.locator('[data-testid="source-row"]').first().click();
+  await waitForPage(3);
+  await waitForHighlight();
+  await settle();
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: out + '/shot-01.png' });
 
-  await page.evaluate(() => {
-    document.getElementById('gallery-heading')?.scrollIntoView({ block: 'start' });
-  });
-  await page.waitForTimeout(500);
-  await page.screenshot({ path: out + '/shot-02.png' });
-
-  await loadDemo();
+  // Trace view: the retrieval trail at the cross-encoder section, tied to the
+  // page-2 citation so the document behind the drawer is still the evidence.
+  await page
+    .getByTestId('example-question')
+    .filter({ hasText: 'Why is SBERT more efficient' })
+    .click();
+  await page.waitForTimeout(350);
+  await page.locator('[data-testid="claim-citation"]').nth(1).click();
+  await waitForPage(2);
+  await waitForHighlight();
   await page.locator('[data-testid="trace-toggle"]').click();
   await page.waitForSelector('.trace-drawer');
   await page.evaluate(() => {
+    window.scrollTo(0, 0);
+    const body = document.querySelector('.drawer-body');
     const sections = Array.from(document.querySelectorAll('.trace-section'));
     const target = sections.find((section) =>
-      (section.textContent || '').includes('Cross-encoder rerank'),
+      (section.textContent || '').includes('Second-pass ranking'),
     );
-    const body = document.querySelector('.drawer-body');
-    if (body && target) body.scrollTop = target.offsetTop - 8;
+    if (body && target) {
+      const bodyRect = body.getBoundingClientRect();
+      const targetRect = target.getBoundingClientRect();
+      body.scrollTop += targetRect.top - bodyRect.top - 8;
+    }
   });
-  await page.waitForTimeout(500);
+  await settle();
+  await page.screenshot({ path: out + '/shot-02.png' });
+
+  // Eval view: the committed eval-report.json rendered by the UI, including
+  // denominators, Wilson ranges and the run date.
+  await page.goto(base + '/eval', { waitUntil: 'networkidle' });
+  await page.waitForSelector('.eval-table');
+  await page.waitForFunction(
+    () => (document.querySelector('.eval-page')?.textContent || '').includes('checks met'),
+    null,
+    { timeout: 30000 },
+  );
+  await settle();
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: out + '/shot-03.png' });
 
   if (problems.length > 0) {
@@ -316,13 +344,19 @@ def _validate_snapshot(out: Path) -> None:
                         f"expected {WIDTH}x{HEIGHT}"
                     )
 
+    preview = manifest.get("previewCommand")
+    if not isinstance(preview, str) or not preview.strip():
+        errors.append("previewCommand must be a non-empty string")
+    if "demo" in manifest:
+        errors.append("manifest must not contain a demo block")
+
     proof = manifest.get("proof")
     if not isinstance(proof, dict):
         errors.append("proof must be an object")
     else:
         measured = proof.get("measured")
-        if not isinstance(measured, list) or not measured:
-            errors.append("proof.measured must contain at least one entry")
+        if not isinstance(measured, list) or len(measured) < 3:
+            errors.append("proof.measured must contain at least 3 entries")
         else:
             for index, entry in enumerate(measured):
                 if not isinstance(entry, dict):
@@ -389,57 +423,53 @@ def _validate_snapshot(out: Path) -> None:
 
 
 def _manifest() -> dict[str, object]:
+    eval_method = (
+        "bash scripts/live.sh eval; generator openai-compatible:openai-fast, "
+        "fastembed bge-small-en-v1.5 + ms-marco-MiniLM-L-6-v2; Windows 11 Pro "
+        "10.0.26200, ONNX CPU; 2026-10-23"
+    )
     measured = [
         {
-            "label": "recall@8, production (hybrid + RRF + rerank)",
+            "label": "retrieval recall@8, production (hybrid + RRF + rerank)",
             "value": "18/24 (75.0%), Wilson 95% [55.1%, 88.0%]",
-            "method": (
-                "uv run docqa eval; Windows 11 Pro 10.0.26200, ONNX CPU; 2026-10-23"
-            ),
+            "method": eval_method,
+            "artifact": "eval-report.json",
+        },
+        {
+            "label": "answer rate, production, free endpoint",
+            "value": "8/24 (33.3%), Wilson 95% [18.0%, 53.3%] - gate FAIL",
+            "method": eval_method,
             "artifact": "eval-report.json",
         },
         {
             "label": "unanswerable refusal, production",
-            "value": "6/6 (100%), Wilson 95% [61.0%, 100%]",
-            "method": (
-                "uv run docqa eval; Windows 11 Pro 10.0.26200, ONNX CPU; 2026-10-23"
-            ),
-            "artifact": "docs/EVAL.md",
-        },
-        {
-            "label": "answer rate, production (extractive fallback, no model key)",
-            "value": "5/24 (20.8%), Wilson 95% [9.2%, 40.5%]",
-            "method": (
-                "uv run docqa eval; Windows 11 Pro 10.0.26200, ONNX CPU; 2026-10-23"
-            ),
+            "value": "6/6 (100.0%), Wilson 95% [61.0%, 100.0%]",
+            "method": eval_method,
             "artifact": "eval-report.json",
         },
         {
-            "label": "recall@3, deliberately weakened vector-only retriever",
-            "value": "15/24 (62.5%), gate FAIL",
-            "method": (
-                "uv run docqa eval --ablate vector-only; Windows 11 Pro 10.0.26200, "
-                "ONNX CPU; 2026-10-23"
-            ),
-            "artifact": "eval-report-ablation.json",
+            "label": "citation precision and faithfulness, rule-based",
+            "value": "7/9 (77.8%), Wilson 95% [45.3%, 93.7%] each - gates FAIL",
+            "method": eval_method,
+            "artifact": "eval-report.json",
         },
         {
-            "label": "retrieval pipeline p95 latency, 20 warm calls",
-            "value": "2825.9 ms",
+            "label": "production eval run cost",
+            "value": "778.6 s; 30 questions; 26 model requests; 0 retries; 0 rate limits",
             "method": (
-                "uv run python scripts/ablation.py; Windows 11 Pro, 12 logical CPUs, "
-                "ONNX CPU; 2026-10-23"
-            ),
-            "artifact": "docs/ABLATION.md",
-        },
-        {
-            "label": "chunk token cap on the pinned corpus",
-            "value": "max 430 tokens; 0 clipped vectors",
-            "method": (
-                "uv run docqa ingest data/corpus/*.pdf; Windows 11 Pro 10.0.26200; "
+                "bash scripts/live.sh eval; provenance.run in eval-report.json; "
                 "2026-10-23"
             ),
-            "artifact": "docs/CORPUS.md",
+            "artifact": "docs/ENV.md",
+        },
+        {
+            "label": "forced-generation diagnostic (not a gate run)",
+            "value": "8/24 (33.3%), Wilson 95% [18.0%, 53.3%]; gate_run false",
+            "method": (
+                "bash scripts/live.sh eval --force-generation; openai-compatible:"
+                "openai-fast; 2026-10-23"
+            ),
+            "artifact": "eval-report-forced.json",
         },
     ]
     invariants = [
@@ -477,7 +507,8 @@ def _manifest() -> dict[str, object]:
         },
         {
             "claim": (
-                "The judge model differs from the generator and is pinned by exact id."
+                "The judge model differs from the generator and is pinned by exact id; "
+                "its reliability is unverified."
             ),
             "test": "tests/test_judge_check.py",
         },
@@ -488,24 +519,32 @@ def _manifest() -> dict[str, object]:
     ]
     limits = [
         (
-            "No generator model key on this machine: answers use the labelled "
-            "extractive fallback, and the answer-rate gate fails at 5/24."
+            "The generator is a free, keyless endpoint (openai-compatible:openai-fast) "
+            "with no SLA and roughly one answer per 30 s per IP; on 2026-10-23 it "
+            "answered only 8/24 answerable questions, so the answer-rate gate fails."
         ),
         (
-            "The eval set is 30 questions (24 answerable), not the planned 100; the "
-            "Wilson intervals are correspondingly wide."
+            "Citation precision and faithfulness are rule-based, not a model judge; the "
+            "77.8% point estimates rest on n=9, so the Wilson interval reaches down to "
+            "45.3%."
         ),
         (
-            "Judge reliability (Cohen's kappa) is unverified: eval/judge.yaml is pinned, "
-            "but no judge endpoint or human anchor set exists."
+            "The committed calibration is fitted in-sample on the same 30 gold questions "
+            "the eval runs; each held-out id-parity fold has only three unanswerable "
+            "questions."
         ),
         (
-            "Local only: no hosted URL, no demo video, and the k6 concurrency scenario "
-            "is unverified because k6 is not installed on this machine."
+            "The eval set is 30 questions (24 answerable, 6 unanswerable), not the "
+            "planned 100; the intervals are wide and the retrieval ordering is not "
+            "statistically established."
         ),
         (
-            "The corpus PDFs are not committed; this snapshot is reproducible only after "
-            "scripts/fetch-corpus has materialised the locked files."
+            "Local only: no hosted URL; the corpus PDFs are not committed; the k6 "
+            "concurrency scenario is opt-in and unverified on this machine."
+        ),
+        (
+            "The screenshots use the committed Sentence-BERT paper and recorded demo "
+            "answers. No live model call was made to capture them."
         ),
     ]
     shots = [
@@ -514,8 +553,10 @@ def _manifest() -> dict[str, object]:
             "width": WIDTH,
             "height": HEIGHT,
             "alt": (
-                "Ask page with an offline demo answer, the cited span highlighted in the "
-                "PDF pane, and the retrieval trace drawer open."
+                "Marginalia over the Sentence-BERT paper: citation 2 selected, its "
+                "verbatim quote highlighted on PDF page 2 with a margin marker, and the "
+                "matching source row in the answer pane. Seeded offline demo data; no "
+                "model call."
             ),
         },
         {
@@ -523,8 +564,9 @@ def _manifest() -> dict[str, object]:
             "width": WIDTH,
             "height": HEIGHT,
             "alt": (
-                "Eval page showing the committed report, gate values, denominators, and "
-                "Wilson intervals."
+                "Citation view for the sentence-embedding question: the selected source "
+                "quote is highlighted on PDF page 3, beside claims 1-3 and the source "
+                "list. Seeded offline demo data; no model call."
             ),
         },
         {
@@ -532,8 +574,9 @@ def _manifest() -> dict[str, object]:
             "width": WIDTH,
             "height": HEIGHT,
             "alt": (
-                "Failure gallery: three cases where a naive answer would be wrong, with "
-                "the passages and numbers behind each verdict."
+                "Retrieval trail at the second-pass cross-encoder section: rerank rank, "
+                "score, calibrated evidence probability, kept status, then the final "
+                "context and decision. Recorded demo trace, not a live request."
             ),
         },
         {
@@ -541,8 +584,9 @@ def _manifest() -> dict[str, object]:
             "width": WIDTH,
             "height": HEIGHT,
             "alt": (
-                "Cross-encoder rerank section of the trace drawer: rerank rank, score, "
-                "calibrated probability, and kept/dropped for each candidate."
+                "Evaluation view of the committed eval-report.json: 2 of 5 checks met, "
+                "counts and denominators, Wilson 95% ranges, report date 2026-10-23, and "
+                "the stage where each question stopped."
             ),
         },
     ]
@@ -551,10 +595,11 @@ def _manifest() -> dict[str, object]:
             raise SystemExit(f"shot order drifted: {shot['file']} != {expected}")
     return {
         "project": "docqa-assistant",
-        "title": "DocQA Assistant",
+        "title": "Marginalia",
         "oneLiner": (
-            "Ask a question about a PDF corpus and get claims that point at highlighted "
-            "spans, with an inspectable retrieval trace and a calibrated refusal."
+            "Ask a question about a PDF corpus and get claims whose quotes are verbatim, "
+            "highlighted on the page, with an inspectable retrieval trace and a "
+            "calibrated refusal."
         ),
         "stack": [
             "Python 3.12",
@@ -562,9 +607,14 @@ def _manifest() -> dict[str, object]:
             "PostgreSQL 16 + pgvector",
             "React + Vite",
             "PDF.js",
+            "ONNX Runtime",
         ],
         "generatedAt": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         "seeded": True,
+        "previewCommand": (
+            "uv run docqa serve --port 8788  # then, in a second shell: "
+            "npm --prefix ui run dev"
+        ),
         "shots": shots,
         "proof": {
             "measured": measured,

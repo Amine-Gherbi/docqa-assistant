@@ -14,7 +14,11 @@ Recorded 2026-10-23 on the build machine. No Docker and no hosted service.
 | PDF parser | PyMuPDF **2.0** (pinned exactly in `pyproject.toml`) |
 | Embedding | fastembed `BAAI/bge-small-en-v1.5`, 384-d, ONNX Runtime, CPU |
 | Reranking | fastembed `Xenova/ms-marco-MiniLM-L-6-v2` (Apache-2.0), ONNX Runtime, CPU |
-| Judge/generator | not part of R1/R2 |
+| Answer API | `uv run docqa serve` on `127.0.0.1:8788` (CLI default); `GET /health`, `POST /ask`, `GET /eval/report` |
+| UI | `npm --prefix ui run dev` on `http://127.0.0.1:5173`; Vite proxies `/api` to `127.0.0.1:8788` |
+| Screenshots | four 2880x1800 WebP files captured at 1440x900 CSS px with deviceScaleFactor 2, recorded 2026-10-23 |
+| UI tests | `npm --prefix ui run e2e`: 4 Playwright tests pass — all three citations scroll and highlight, every recorded claim resolves with no render miss; `node ui/scripts/verify_demo_paper.mjs`: 9/9 demo claims resolve against the committed PDF, recorded 2026-10-23 |
+| Judge model | `claude-opus-5-5` pinned in `eval/judge.yaml`, different from the generator; reliability unverified |
 
 ## Embedding path used: real model
 
@@ -267,7 +271,7 @@ bash scripts/live.sh warm           # six demo answers → data/demo-answers.jso
 bash scripts/live.sh eval           # 30 questions; 778.6 s measured; ~31 s between calls
 bash scripts/live.sh eval --force-generation  # diagnostic: bypass low_score, exit 0
 
-uv run docqa serve --port 8100            # POST /ask and GET /health
+uv run docqa serve --port 8788            # POST /ask, GET /health, GET /eval/report
 uv run docqa serve --uncalibrated         # explicit, recorded in responses
 uv run python scripts/fit_calibration_gold.py   # refit on the human gold set (local DB)
 uv run python scripts/fit_calibration.py        # provisional synthetic fit; overwrites the artifact
@@ -288,7 +292,7 @@ The k6 step is **opt-in** (`DOCQA_WITH_K6=1`) because a loopback latency gate in
 whatever else the machine is doing: two runs on this host measured p95 7.92 s and 9.22 s
 for the same code, the second while a Playwright suite was running. A gate that fails
 because another test was running is not a gate. The default `verify` is deterministic
-(lint, types, 92 tests); the load number is measured on demand and quoted with its date.
+(lint, types, 107 tests); the load number is measured on demand and quoted with its date.
 
 That is a measured CPU limitation, not a passing grade: the 5 s gate is crossed locally,
 and it stays crossed until inference has a GPU or a smaller model.
