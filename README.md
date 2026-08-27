@@ -1,5 +1,7 @@
 # Marginalia
 
+**Case study:** https://gherbi.pages.dev/projects/docqa-assistant/ — the app runs locally, not on a host.
+
 **What it is.** Ask a question about a PDF corpus and get an answer whose every claim is tied to a verbatim quote from the cited page, highlighted in the reader, with the retrieval trace and the calibrated refusal that produced it.
 
 **What it does not do.** No hosted URL, no login, no video, no unvalidated token streaming, and no committed corpus PDFs; the free endpoint's answer quality is measured, not promised — 3 of 5 production gates fail (2026-10-23).
