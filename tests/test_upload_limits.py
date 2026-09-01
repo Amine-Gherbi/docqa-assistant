@@ -69,6 +69,32 @@ def test_rejects_encrypted_pdfs() -> None:
     assert error.code == "encrypted"
 
 
+def test_rejects_an_inline_encryption_dictionary() -> None:
+    """PyMuPDF writes `/Encrypt<<...>>` in the trailer rather than a reference."""
+    raw = (
+        b"%PDF-1.7\ntrailer\n<< /Root 1 0 R /Encrypt<< /Filter/Standard"
+        b" /R 6 /V 5 /Length 256 >> >>\n%%EOF\nstartxref\n0\n"
+    )
+    error = _error(raw)
+    assert error.status_code == 422
+    assert error.code == "encrypted"
+
+
+def test_rejects_a_pymupdf_encrypted_document() -> None:
+    document = pymupdf.open()
+    document.new_page().insert_text((72, 72), "protected")
+    raw = document.tobytes(
+        encryption=pymupdf.PDF_ENCRYPT_AES_256,
+        owner_pw="owner",
+        user_pw="user",
+    )
+    document.close()
+    assert inspect_pdf(raw).encrypted is True
+    error = _error(raw)
+    assert error.status_code == 422
+    assert error.code == "encrypted"
+
+
 def test_rejects_bytes_without_a_complete_trailer() -> None:
     error = _error(b"%PDF-1.7\n1 0 obj\n<< /Type /Pages /Count 1 >>\nendobj\n")
     assert error.status_code == 422
