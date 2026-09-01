@@ -65,7 +65,12 @@ class Document(Base):
 
     __tablename__ = "documents"
     __table_args__ = (
-        UniqueConstraint("sha256", name="uq_documents_sha256"),
+        Index(
+            "uq_documents_collection_sha256",
+            "collection_id",
+            "sha256",
+            unique=True,
+        ),
         Index("ix_documents_collection_id", "collection_id"),
     )
 

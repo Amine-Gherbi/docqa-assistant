@@ -33,6 +33,7 @@ class UploadLimitError(Exception):
         *,
         limit: int | None = None,
     ) -> None:
+        """Bind the status, code, detail, and the limit that was hit."""
         super().__init__(detail)
         self.status_code = status_code
         self.code = code

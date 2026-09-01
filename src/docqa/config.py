@@ -20,6 +20,8 @@ DEFAULT_CALIBRATION_PATH = PROJECT_ROOT / "eval" / "calibration.json"
 DEFAULT_STRUCTURED_OUTPUT_PROBE = PROJECT_ROOT / "eval" / "structured-output.json"
 DEFAULT_DEMO_ANSWERS_PATH = PROJECT_ROOT / "data" / "demo-answers.json"
 EMBEDDING_DIM = 384
+# The seeded demo corpus. Every visitor upload gets its own collection id.
+DEMO_COLLECTION = "demo"
 
 # The keyed free tier answers one request at a time; 20 s between request
 # starts leaves room for a ~15 s answer plus the provider's own pacing.
