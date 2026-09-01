@@ -95,3 +95,35 @@ def test_alembic_keeps_the_ini_url_without_an_environment_value(
         alembic_database_url("postgresql+asyncpg://postgres@localhost:5433/docqa")
         == "postgresql+asyncpg://postgres@localhost:5433/docqa"
     )
+
+
+def test_rerank_memory_defaults_are_safe_for_a_512mb_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One pair at a time and no CPU arena unless a deploy opts in."""
+    monkeypatch.delenv("DOCQA_RERANK_BATCH_SIZE", raising=False)
+    monkeypatch.delenv("DOCQA_ONNX_MEMORY_ARENA", raising=False)
+    settings = get_settings()
+    assert settings.rerank_batch_size == 1
+    assert settings.onnx_memory_arena is False
+
+
+def test_rerank_memory_knobs_are_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A larger machine can raise the batch and re-enable the arena."""
+    monkeypatch.setenv("DOCQA_RERANK_BATCH_SIZE", "4")
+    monkeypatch.setenv("DOCQA_ONNX_MEMORY_ARENA", "1")
+    settings = get_settings()
+    assert settings.rerank_batch_size == 4
+    assert settings.onnx_memory_arena is True
+
+
+@pytest.mark.parametrize("raw", ["0", "-1", "many"])
+def test_rerank_batch_size_rejects_bad_values(
+    monkeypatch: pytest.MonkeyPatch, raw: str
+) -> None:
+    """A batch size that would break the bound fails at startup, not later."""
+    monkeypatch.setenv("DOCQA_RERANK_BATCH_SIZE", raw)
+    with pytest.raises(ValueError, match="DOCQA_RERANK_BATCH_SIZE"):
+        get_settings()

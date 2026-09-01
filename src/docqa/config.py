@@ -59,9 +59,14 @@ class Settings:
     # ONNX Runtime sizes its per-thread arenas from the visible CPU count. On a
     # free instance (0.1 CPU, 512 MB) that over-allocates; set to 1 there.
     onnx_threads: int | None = None
-    # The cross-encoder pads every pair in a batch to 512 tokens. A batch of 24
-    # needs a ~300 MB attention tensor; one at a time keeps the peak small.
-    rerank_batch_size: int = 64
+    # The cross-encoder pads every pair in a batch to the batch's longest input
+    # and allocates an attention tensor of batch x 12 x 512 x 512 floats. On the
+    # hosted free instance a batch of 20 measured +439 MB; one pair at a time
+    # measured +31 MB with identical scores. Default to the safe value.
+    rerank_batch_size: int = 1
+    # The CPU memory arena keeps ONNX buffers alive after inference. The hosted
+    # reranker disables it; the library only exposes the option there.
+    onnx_memory_arena: bool = False
     # Diagnostic only: bypasses the calibrated low-score refusal so the model's
     # own answer rate can be measured. Never use it for a gate run.
     force_generation: bool = False
@@ -137,6 +142,18 @@ def _onnx_threads_from_environment() -> int | None:
         raise ValueError("DOCQA_ONNX_THREADS must be an integer") from exc
     if value < 1:
         raise ValueError("DOCQA_ONNX_THREADS must be at least 1")
+    return value
+
+
+def _rerank_batch_size_from_environment() -> int:
+    """Read ``DOCQA_RERANK_BATCH_SIZE``; default keeps one pair in memory."""
+    raw = os.environ.get("DOCQA_RERANK_BATCH_SIZE", "1").strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("DOCQA_RERANK_BATCH_SIZE must be an integer") from exc
+    if value < 1:
+        raise ValueError("DOCQA_RERANK_BATCH_SIZE must be at least 1")
     return value
 
 
@@ -316,5 +333,7 @@ def get_settings() -> Settings:
             os.environ.get("DOCQA_CORS_ORIGINS")
         ),
         onnx_threads=_onnx_threads_from_environment(),
+        rerank_batch_size=_rerank_batch_size_from_environment(),
+        onnx_memory_arena=_boolean_from_environment("DOCQA_ONNX_MEMORY_ARENA"),
         force_generation=_boolean_from_environment("DOCQA_FORCE_GENERATION"),
     )

@@ -45,6 +45,14 @@ from docqa.config import EMBEDDING_DIM, PROJECT_ROOT, Settings
 
 MAX_CHUNK_TOKENS = 448
 
+# One API process answers one question at a time on the free instance. The
+# default pool (5 + 10 overflow) keeps up to 15 asyncpg connection buffers for
+# no benefit; bound it and recycle old connections so a proxied host connection
+# cannot pin a closed socket.
+POOL_SIZE = 2
+MAX_OVERFLOW = 2
+POOL_RECYCLE_S = 300
+
 
 class Base(DeclarativeBase):
     """Declarative base for every docqa table."""
@@ -124,8 +132,14 @@ class Chunk(Base):
 
 
 def make_engine(settings: Settings) -> AsyncEngine:
-    """Create an async engine for the configured database."""
-    return create_async_engine(settings.database_url, pool_pre_ping=True)
+    """Create a bounded async engine for the configured database."""
+    return create_async_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        pool_size=POOL_SIZE,
+        max_overflow=MAX_OVERFLOW,
+        pool_recycle=POOL_RECYCLE_S,
+    )
 
 
 def make_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

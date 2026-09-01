@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import cast
 
+import anyio
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -47,7 +48,7 @@ from docqa.db import (
     session_scope,
 )
 from docqa.ingest.embedder import build_embedder
-from docqa.rerank import build_reranker
+from docqa.rerank import Reranker, RerankerChoice, build_reranker
 from docqa.retrieval import (
     PgCandidateSource,
     RetrievalResult,
@@ -160,30 +161,58 @@ class PgRetriever:
     """Production retriever: hybrid retrieval over the configured database."""
 
     def __init__(self, settings: Settings) -> None:
-        """Build the engine, embedder, and reranker; does not connect yet."""
+        """Build the engine and embedder; load the reranker on first use.
+
+        Both ONNX models stay resident for the life of the process. The
+        embedder is needed for every live question; the cross-encoder adds
+        ~62 MB and is not needed for a recorded demo answer, so it is loaded on
+        the first retrieval instead of at boot, shortening the cold start.
+        """
         self._engine = make_engine(settings)
         self._factory = make_session_factory(self._engine)
+        self._settings = settings
+        self._rerank_mode = os.environ.get("DOCQA_RERANKER", "auto").strip().lower()
         embedder_choice = build_embedder(settings)
         self._embedder = embedder_choice.embedder
         LOGGER.info("%s", embedder_choice.banner)
-        rerank_mode = os.environ.get("DOCQA_RERANKER", "auto").strip().lower()
-        rerank_choice = build_reranker(
-            mode=rerank_mode,
-            cache_dir=str(settings.hf_cache_dir) if settings.hf_cache_dir else None,
-            threads=settings.onnx_threads,
+        self._reranker: Reranker | None = None
+        self._reranker_lock = asyncio.Lock()
+
+    def _load_reranker(self) -> RerankerChoice:
+        """Build the configured reranker; runs in a worker thread."""
+        return build_reranker(
+            mode=self._rerank_mode,
+            cache_dir=(
+                str(self._settings.hf_cache_dir)
+                if self._settings.hf_cache_dir
+                else None
+            ),
+            threads=self._settings.onnx_threads,
+            batch_size=self._settings.rerank_batch_size,
+            memory_arena=self._settings.onnx_memory_arena,
         )
-        self._reranker = rerank_choice.reranker
-        LOGGER.info("%s", rerank_choice.banner)
+
+    async def _ensure_reranker(self) -> Reranker:
+        """Load the reranker once, even under concurrent first requests."""
+        if self._reranker is not None:
+            return self._reranker
+        async with self._reranker_lock:
+            if self._reranker is None:
+                choice = await anyio.to_thread.run_sync(self._load_reranker)
+                LOGGER.info("%s", choice.banner)
+                self._reranker = choice.reranker
+        return self._reranker
 
     async def retrieve_result(self, question: str) -> RetrievalResult:
         """Run the R2 pipeline and return the context plus its trace."""
+        reranker = await self._ensure_reranker()
         async with session_scope(self._factory) as session:
             return await retrieve_with_trace(
                 question,
                 DEFAULT_K,
                 embedder=self._embedder,
                 source=PgCandidateSource(session),
-                reranker=self._reranker,
+                reranker=reranker,
             )
 
     async def __call__(self, question: str) -> list[RetrievedChunk]:

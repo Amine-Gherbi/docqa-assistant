@@ -47,6 +47,8 @@ class ProductionAnswerer:
             mode=os.environ.get("DOCQA_RERANKER", "auto").strip().lower(),
             cache_dir=str(settings.hf_cache_dir) if settings.hf_cache_dir else None,
             threads=settings.onnx_threads,
+            batch_size=settings.rerank_batch_size,
+            memory_arena=settings.onnx_memory_arena,
         )
         self.embedder_banner = embedder_choice.banner
         self.reranker_banner = reranker_choice.banner

@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -9,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 
-import { askQuestion } from './api';
+import { askQuestionWithWarmup, warmApi } from './api';
 import { EvalPage } from './components/EvalPage';
 import { PdfPane } from './components/PdfPane';
 import { TraceDrawer } from './components/TraceDrawer';
@@ -272,6 +273,7 @@ function AskPage() {
     DEFAULT_DEMO_QUESTION.answer,
   );
   const [loading, setLoading] = useState(false);
+  const [coldStarting, setColdStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -294,6 +296,12 @@ function AskPage() {
       field.style.height = `${field.scrollHeight + border}px`;
     }
   }, [question]);
+
+  // Wake a sleeping free instance as soon as the page loads, so a visitor's
+  // first question does not pay the whole cold start in front of an error page.
+  useEffect(() => {
+    void warmApi();
+  }, []);
 
   const handleMiss = useCallback((attemptId: string) => {
     if (missedAttempts.current.has(attemptId)) {
@@ -345,11 +353,14 @@ function AskPage() {
     }
 
     setLoading(true);
+    setColdStarting(false);
     setError(null);
     setAnswer(null);
     setSelection(null);
     try {
-      const response = await askQuestion(text);
+      const response = await askQuestionWithWarmup(text, () =>
+        setColdStarting(true),
+      );
       presentAnswer(response);
     } catch (cause) {
       setError(
@@ -359,6 +370,7 @@ function AskPage() {
       );
     } finally {
       setLoading(false);
+      setColdStarting(false);
     }
   };
 
@@ -469,8 +481,9 @@ function AskPage() {
           <div className="loading-state" role="status" aria-live="polite">
             <span className="loading-rule" aria-hidden="true" />
             <p>
-              Searching the document for relevant passages, then checking each
-              quote against the page.
+              {coldStarting
+                ? 'Starting the free instance — this can take up to a minute, then the question is answered automatically.'
+                : 'Searching the document for relevant passages, then checking each quote against the page.'}
             </p>
           </div>
         ) : null}
