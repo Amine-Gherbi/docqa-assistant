@@ -380,6 +380,10 @@ class AnswerResponse:
     uncalibrated: bool
     model_reason: str | None = None
     forced_generation: bool = False
+    # The id sent and the id the provider reported. They differ when a
+    # ``-latest`` alias moved or when the documented retry model answered.
+    model_requested: str | None = None
+    model_answered: str | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -634,6 +638,10 @@ class ModelReply:
     raw_text: str
     via_tool_call: bool
     error: str | None = None
+    # The id the provider reports in the response body. ``-latest`` aliases are
+    # not stable, so the eval records this next to the id it requested.
+    model: str | None = None
+    http_status: int | None = None
 
 
 @runtime_checkable
@@ -794,6 +802,8 @@ class ModelCallStats:
     requests: int = 0
     retries: int = 0
     rate_limited: int = 0
+    server_errors: int = 0
+    timeouts: int = 0
 
     def as_dict(self) -> dict[str, int]:
         """JSON-safe counters."""
@@ -801,7 +811,17 @@ class ModelCallStats:
             "requests": self.requests,
             "retries": self.retries,
             "rate_limited": self.rate_limited,
+            "server_errors": self.server_errors,
+            "timeouts": self.timeouts,
         }
+
+    def add(self, other: ModelCallStats) -> None:
+        """Accumulate another client's counters (used by the failover chain)."""
+        self.requests += other.requests
+        self.retries += other.retries
+        self.rate_limited += other.rate_limited
+        self.server_errors += other.server_errors
+        self.timeouts += other.timeouts
 
 
 class _EndpointGate:
@@ -887,6 +907,21 @@ class OpenAICompatibleModel:
         """The endpoint this client writes to."""
         return self._base_url
 
+    @property
+    def model_name(self) -> str:
+        """The exact model id sent in the request body."""
+        return self._model_name
+
+    @property
+    def requested_model(self) -> str:
+        """The primary id, for the eval report."""
+        return self._model_name
+
+    @property
+    def model_chain(self) -> tuple[str, ...]:
+        """Return the single id this client sends."""
+        return (self._model_name,)
+
     def _body(self, request: ModelRequest) -> dict[str, object]:
         body: dict[str, object] = {
             "model": self._model_name,
@@ -925,10 +960,20 @@ class OpenAICompatibleModel:
             ]
         return body
 
+    def _headers(self) -> dict[str, str]:
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
+
     async def _send(
         self, body: dict[str, object], headers: dict[str, str]
-    ) -> tuple[httpx.Response | None, str | None]:
-        """One HTTP attempt; transport failures become a readable error string."""
+    ) -> tuple[httpx.Response | None, str | None, bool]:
+        """One HTTP attempt; transport failures become a readable error string.
+
+        The third value is True for a timeout, which — like HTTP 429 and 503 —
+        is retried with exponential backoff instead of failing the question.
+        """
         try:
             async with httpx.AsyncClient(
                 timeout=self._timeout_s, transport=self._transport
@@ -936,54 +981,65 @@ class OpenAICompatibleModel:
                 response = await client.post(
                     f"{self._base_url}/chat/completions", json=body, headers=headers
                 )
-                return response, None
+                return response, None, False
+        except httpx.TimeoutException as exc:
+            return None, f"{type(exc).__name__}: {exc}", True
         except httpx.HTTPError as exc:
-            return None, f"{type(exc).__name__}: {exc}"
+            return None, f"{type(exc).__name__}: {exc}", False
 
-    async def _post(self, body: dict[str, object]) -> object:
-        """POST with serialisation, 31 s spacing, and two 429 retries."""
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+    async def post_once(
+        self, body: dict[str, object]
+    ) -> tuple[httpx.Response | None, str | None, bool]:
+        """One attempt through the shared endpoint gate, with no retry logic.
+
+        The judge availability probe needs the raw HTTP status of every
+        attempt, so it calls this directly instead of :meth:`_post`.
+        """
         gate = (
             _endpoint_gate(self._base_url) if self._min_interval_s > 0 else None
         )
+        if gate is None:
+            self.stats.requests += 1
+            return await self._send(body, self._headers())
+        async with gate.lock:
+            delay = gate.last_start + self._min_interval_s - time.monotonic()
+            if delay > 0:
+                LOGGER.debug(
+                    "waiting %.1fs for the %s rate limit", delay, self._base_url
+                )
+                await asyncio.sleep(delay)
+            gate.last_start = time.monotonic()
+            self.stats.requests += 1
+            return await self._send(body, self._headers())
+
+    @staticmethod
+    def _retry_delay(
+        attempt: int, backoff_s: float, retry_after: float | None
+    ) -> float:
+        exponential: float = backoff_s * float(2 ** (attempt - 1))
+        return max(exponential, retry_after or 0.0)
+
+    async def _post(self, body: dict[str, object]) -> object:
+        """POST with serialisation, spacing, and exponential backoff.
+
+        HTTP 429 and 503 and request timeouts are retried ``max_retries``
+        times; an exhausted 429 raises :class:`RateLimitedError` and any other
+        exhausted failure raises :class:`ModelCallError`.
+        """
         attempt = 0
         while True:
-            if gate is not None:
-                async with gate.lock:
-                    delay = (
-                        gate.last_start + self._min_interval_s - time.monotonic()
-                    )
-                    if delay > 0:
-                        LOGGER.debug(
-                            "waiting %.1fs for the %s rate limit",
-                            delay,
-                            self._base_url,
-                        )
-                        await asyncio.sleep(delay)
-                    gate.last_start = time.monotonic()
-                    self.stats.requests += 1
-                    response, error = await self._send(body, headers)
-            else:
-                self.stats.requests += 1
-                response, error = await self._send(body, headers)
+            response, error, timed_out = await self.post_once(body)
 
             if error is not None:
-                raise ModelCallError(error)
-            if response is None:  # pragma: no cover - _send never returns this.
-                raise ModelCallError("empty HTTP response")
-            if response.status_code == 429:
-                retry_after = _retry_after_seconds(response)
-                if attempt < self._max_retries:
+                if timed_out and attempt < self._max_retries:
                     attempt += 1
                     self.stats.retries += 1
-                    delay = max(
-                        self._retry_backoff_s * (2 ** (attempt - 1)),
-                        retry_after or 0.0,
+                    self.stats.timeouts += 1
+                    delay = self._retry_delay(
+                        attempt, self._retry_backoff_s, None
                     )
                     LOGGER.warning(
-                        "HTTP 429 from %s; retry %d/%d in %.1fs",
+                        "timeout from %s; retry %d/%d in %.1fs",
                         self._base_url,
                         attempt,
                         self._max_retries,
@@ -991,6 +1047,33 @@ class OpenAICompatibleModel:
                     )
                     await asyncio.sleep(delay)
                     continue
+                if timed_out:
+                    self.stats.timeouts += 1
+                raise ModelCallError(error)
+            if response is None:  # pragma: no cover - _send never returns this.
+                raise ModelCallError("empty HTTP response")
+
+            retry_after = _retry_after_seconds(response)
+            retryable_status = response.status_code in {429, 503}
+            if retryable_status and attempt < self._max_retries:
+                attempt += 1
+                self.stats.retries += 1
+                if response.status_code == 503:
+                    self.stats.server_errors += 1
+                delay = self._retry_delay(
+                    attempt, self._retry_backoff_s, retry_after
+                )
+                LOGGER.warning(
+                    "HTTP %d from %s; retry %d/%d in %.1fs",
+                    response.status_code,
+                    self._base_url,
+                    attempt,
+                    self._max_retries,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            if response.status_code == 429:
                 self.stats.rate_limited += 1
                 raise RateLimitedError(
                     "rate_limited: "
@@ -1006,6 +1089,8 @@ class OpenAICompatibleModel:
                     retry_after_s=retry_after,
                 )
             if response.status_code >= 400:
+                if response.status_code == 503:
+                    self.stats.server_errors += 1
                 raise ModelCallError(
                     f"HTTP {response.status_code}: {response.text[:300]}"
                 )
@@ -1031,6 +1116,79 @@ class OpenAICompatibleModel:
         return _reply_from_body(body, expect_tool=self.structured_output == "tool")
 
 
+class FailoverModel:
+    """Try the documented model chain in order, then fail loudly.
+
+    The generator has one documented retry id (the free tier retires and
+    overloads model ids independently). Each entry in the chain is a complete
+    client call with its own 429/503/timeout retries; the reply keeps the id the
+    provider reported so the eval records which model actually answered.
+    """
+
+    def __init__(self, models: Sequence[OpenAICompatibleModel]) -> None:
+        """Build a chain from at least one client; order is the retry order."""
+        if not models:
+            raise ValueError("a model chain needs at least one client")
+        self._models = tuple(models)
+        self.structured_output: Literal["tool", "json", "extractive"] = (
+            self._models[0].structured_output
+        )
+        primary = self._models[0].model_name
+        retries = [model.model_name for model in self._models[1:]]
+        self.name = f"openai-compatible:{primary}" + (
+            f" (retry {', '.join(retries)})" if retries else ""
+        )
+
+    @property
+    def requested_model(self) -> str:
+        """The primary model id sent first."""
+        return self._models[0].model_name
+
+    @property
+    def model_chain(self) -> tuple[str, ...]:
+        """Every model id in the chain, in order."""
+        return tuple(model.model_name for model in self._models)
+
+    @property
+    def endpoint(self) -> str:
+        """The shared endpoint the chain writes to."""
+        return self._models[0].endpoint
+
+    @property
+    def stats(self) -> ModelCallStats:
+        """Aggregate wire counters over every model in the chain."""
+        total = ModelCallStats()
+        for model in self._models:
+            total.add(model.stats)
+        return total
+
+    async def complete(self, request: ModelRequest) -> ModelReply:
+        """Return the first usable reply, or raise with every failure named."""
+        failures: list[str] = []
+        last_rate_limited = False
+        for model in self._models:
+            try:
+                reply = await model.complete(request)
+            except RateLimitedError as exc:
+                last_rate_limited = True
+                failures.append(f"{model.model_name}: {exc}")
+                continue
+            last_rate_limited = False
+            if reply.error is None and reply.payload is not None:
+                return reply
+            failures.append(
+                f"{model.model_name}: {reply.error or 'no usable payload'}"
+            )
+        message = "all models in the chain failed: " + "; ".join(failures)
+        if last_rate_limited:
+            raise RateLimitedError(
+                message,
+                endpoint=self.endpoint,
+                attempts=len(self._models),
+            )
+        raise ModelCallError(message)
+
+
 def _string(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
@@ -1040,6 +1198,7 @@ def _reply_from_body(body: object, *, expect_tool: bool) -> ModelReply:
     data = _as_dict(body)
     if data is None:
         return ModelReply(None, "", False, "response body is not a JSON object")
+    reported_model = _string(data.get("model"))
     error_field = _string(data.get("error"))
     if error_field is not None:
         return ModelReply(None, "", False, f"gateway error: {error_field}")
@@ -1067,6 +1226,8 @@ def _reply_from_body(body: object, *, expect_tool: bool) -> ModelReply:
             raw_text=raw,
             via_tool_call=name == SUBMIT_ANSWER_TOOL,
             error=error,
+            model=reported_model,
+            http_status=200,
         )
 
     content = _string(message.get("content"))
@@ -1075,7 +1236,14 @@ def _reply_from_body(body: object, *, expect_tool: bool) -> ModelReply:
         return ModelReply(None, "", False, f"response contained no {expectation}")
     payload = parse_json_lenient(content)
     error = None if payload is not None else "message content was not valid JSON"
-    return ModelReply(payload=payload, raw_text=content, via_tool_call=False, error=error)
+    return ModelReply(
+        payload=payload,
+        raw_text=content,
+        via_tool_call=False,
+        error=error,
+        model=reported_model,
+        http_status=200,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1104,6 +1272,8 @@ async def answer_question(
         calibration.probability(top_score) if top_score is not None else None
     )
     info = calibration.info()
+    requested_model = getattr(model, "requested_model", model.name)
+    answered_model: str | None = None
 
     if not force_generation and calibration.calibrated and probability is not None:
         threshold = calibration.threshold
@@ -1136,6 +1306,7 @@ async def answer_question(
         chunks=context,
     )
     reply = await _call(model, request)
+    answered_model = reply.model
     raw, errors = _parse_reply(reply)
     schema_failures = 1 if errors else 0
     repair_turns = 0
@@ -1148,6 +1319,7 @@ async def answer_question(
             previous_response=reply.raw_text,
         )
         reply = await _call(model, repair_request)
+        answered_model = reply.model
         raw, errors = _parse_reply(reply)
         if errors:
             schema_failures = 2
@@ -1167,6 +1339,8 @@ async def answer_question(
                 schema_failures=schema_failures, repair_turns=repair_turns
             ),
             force_generation=force_generation,
+            model_requested=requested_model,
+            model_answered=answered_model,
         )
 
     if raw.insufficient_evidence:
@@ -1183,6 +1357,8 @@ async def answer_question(
             ),
             model_reason=raw.reason,
             force_generation=force_generation,
+            model_requested=requested_model,
+            model_answered=answered_model,
         )
 
     kept, counts = validate_claims(raw.claims, context)
@@ -1205,6 +1381,8 @@ async def answer_question(
             probability=probability,
             validation=report,
             force_generation=force_generation,
+            model_requested=requested_model,
+            model_answered=answered_model,
         )
     return AnswerResponse(
         claims=tuple(kept),
@@ -1218,6 +1396,8 @@ async def answer_question(
         calibration=info,
         uncalibrated=calibration.uncalibrated,
         forced_generation=force_generation,
+        model_requested=requested_model,
+        model_answered=answered_model,
     )
 
 
@@ -1257,6 +1437,8 @@ def _refusal(
     validation: ValidationReport,
     model_reason: str | None = None,
     force_generation: bool = False,
+    model_requested: str | None = None,
+    model_answered: str | None = None,
 ) -> AnswerResponse:
     return AnswerResponse(
         claims=(),
@@ -1271,27 +1453,35 @@ def _refusal(
         uncalibrated=info.uncalibrated,
         model_reason=model_reason,
         forced_generation=force_generation,
+        model_requested=model_requested,
+        model_answered=model_answered,
     )
 
 
 def build_model(settings: Settings) -> StructuredModel:
-    """Pick the configured model, or the labelled extractive fallback without a key."""
+    """Pick the configured model chain, or the labelled extractive fallback."""
     if not settings.model_configured or settings.model_base_url is None:
         LOGGER.warning(
             "no DOCQA_MODEL_BASE_URL configured; using the extractive fallback "
             "(no model key)"
         )
         return ExtractiveModel()
-    return OpenAICompatibleModel(
-        settings.model_base_url,
-        settings.model_name,
-        structured_output=settings.structured_output,
-        api_key=settings.model_api_key,
-        timeout_s=settings.model_timeout_s,
-        min_interval_s=settings.model_min_interval_s,
-        max_retries=settings.model_max_retries,
-        retry_backoff_s=settings.model_retry_backoff_s,
-    )
+    clients = [
+        OpenAICompatibleModel(
+            settings.model_base_url,
+            name,
+            structured_output=settings.structured_output,
+            api_key=settings.model_api_key,
+            timeout_s=settings.model_timeout_s,
+            min_interval_s=settings.model_min_interval_s,
+            max_retries=settings.model_max_retries,
+            retry_backoff_s=settings.model_retry_backoff_s,
+        )
+        for name in settings.model_chain
+    ]
+    if len(clients) == 1:
+        return clients[0]
+    return FailoverModel(clients)
 
 
 # --------------------------------------------------------------------------- #

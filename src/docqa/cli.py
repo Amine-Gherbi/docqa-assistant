@@ -7,7 +7,6 @@ import asyncio
 import dataclasses
 import hashlib
 import json
-import os
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -148,6 +147,14 @@ def _parser() -> argparse.ArgumentParser:
         help="validate the pinned judge protocol and report its measurement status",
     )
     judge.add_argument("--json", action="store_true", help="print the verdict as JSON")
+    judge.add_argument(
+        "--probe",
+        action="store_true",
+        help=(
+            "ask the pinned judge id one real question and record every HTTP "
+            "status; never substitutes the generator"
+        ),
+    )
     judge.add_argument(
         "--probe-tool-choice",
         action="store_true",
@@ -483,40 +490,16 @@ def _run_probe(args: argparse.Namespace, settings: Settings) -> int:
     return EXIT_OK if verdict.honoured is not False else EXIT_PROBE_REWRITTEN
 
 
-def _read_flat_yaml(path: Path) -> dict[str, str]:
-    """Read the flat ``key: value`` judge protocol file.
-
-    The judge artifact is intentionally a small flat file; rejecting nesting is
-    better than silently mis-parsing a protocol that must be exact.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise ValueError(f"cannot read {path}: {exc}") from exc
-    values: dict[str, str] = {}
-    for number, raw in enumerate(text.splitlines(), start=1):
-        line = raw.split("#", 1)[0].strip()
-        if not line:
-            continue
-        key, separator, value = line.partition(":")
-        if not separator or not key.strip():
-            raise ValueError(f"{path}:{number}: expected 'key: value'")
-        key = key.strip()
-        if key in values:
-            raise ValueError(f"{path}:{number}: duplicate key {key!r}")
-        values[key] = value.strip().strip("'\"")
-    return values
-
-
 def _run_judge_check(args: argparse.Namespace, settings: Settings) -> int:
     """Validate the judge protocol; never claim a reliability it did not measure."""
+    from docqa.judge import probe_judge, read_flat_yaml, write_judge_status
+
     judge_path = settings.calibration_path.parent / "judge.yaml"
     prompt_path = settings.calibration_path.parent / "judge-prompt.txt"
-    endpoint = os.environ.get("DOCQA_JUDGE_BASE_URL", "").strip()
     record: dict[str, object] = {
         "judge_yaml": str(judge_path),
         "configured": judge_path.is_file(),
-        "endpoint_configured": bool(endpoint),
+        "endpoint_configured": settings.model_base_url is not None,
         "generator_model": settings.model_name,
         "status": "unverified",
         "reason": "",
@@ -530,7 +513,7 @@ def _run_judge_check(args: argparse.Namespace, settings: Settings) -> int:
         )
     else:
         try:
-            protocol = _read_flat_yaml(judge_path)
+            protocol = read_flat_yaml(judge_path)
             missing = [name for name in JUDGE_REQUIRED if not protocol.get(name)]
             if missing:
                 raise ValueError(f"missing required field(s): {', '.join(missing)}")
@@ -567,20 +550,47 @@ def _run_judge_check(args: argparse.Namespace, settings: Settings) -> int:
                     "model_differs_from_generator": True,
                 }
             )
-            if not endpoint:
+            if settings.model_base_url is None:
                 record["reason"] = (
-                    "judge protocol is pinned and valid, but DOCQA_JUDGE_BASE_URL "
-                    "is unset; no reliability (Cohen's kappa) was measured"
+                    "judge protocol is pinned and valid, but no model endpoint is "
+                    "configured; no reliability (Cohen's kappa) was measured"
                 )
             elif not prompt_path.is_file():
                 record["reason"] = (
-                    "judge endpoint is configured, but eval/judge-prompt.txt is "
+                    "a model endpoint is configured, but eval/judge-prompt.txt is "
                     "absent so the pinned prompt cannot be verified"
+                )
+            elif getattr(args, "probe", False):
+                status = asyncio.run(
+                    probe_judge(
+                        settings,
+                        model,
+                        system_prompt=prompt_path.read_text(encoding="utf-8"),
+                    )
+                )
+                write_judge_status(
+                    settings.calibration_path.parent / "judge-status.json", status
+                )
+                record.update(
+                    {
+                        "status": status.status,
+                        "reason": status.reason,
+                        "attempts": [
+                            attempt.as_dict() for attempt in status.attempts
+                        ],
+                        "retries": status.retries,
+                        "judge_status_artifact": str(
+                            settings.calibration_path.parent / "judge-status.json"
+                        ),
+                    }
                 )
             else:
                 record["reason"] = (
-                    "judge endpoint and prompt are configured, but this build has "
-                    "no judge client or human anchor set; reliability is unmeasured"
+                    "judge protocol and endpoint are configured; run "
+                    "`docqa judge-check --probe` to ask the judge id one real "
+                    "question. Reliability is unmeasured either way: no "
+                    "human-labelled per-claim decisions exist, so no Cohen's "
+                    "kappa is computed."
                 )
         except (OSError, ValueError) as exc:
             record["status"] = "invalid"
@@ -596,7 +606,10 @@ def _run_judge_check(args: argparse.Namespace, settings: Settings) -> int:
             print(f"  prompt_sha256: {record.get('prompt_sha256', '—')}")
             print(f"  rubric_version: {record.get('rubric_version', '—')}")
             print(f"  temperature: {record.get('temperature', '—')}")
-        print(f"  endpoint: {'set' if endpoint else 'unset (DOCQA_JUDGE_BASE_URL)'}")
+        print(
+            "  endpoint: "
+            + ("set" if settings.model_base_url else "unset (DOCQA_MODEL_BASE_URL)")
+        )
         print(f"  reason: {record['reason']}")
         print(f"status: {str(record['status']).upper()}")
 

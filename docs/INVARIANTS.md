@@ -1,7 +1,9 @@
 # Invariants
 
 Rules that must never break. Each cites the enforcing code and the test that
-fails if it regresses. Invariant 6's reliability half is **unverified**.
+fails if it regresses. Invariant 6's reliability half is **unmeasured**: the
+judge id is pinned and differs from the generator, but no human labels exist
+for Cohen's kappa, so the rule-based metric is the reported one.
 
 | # | Invariant | Code | Test |
 |---|---|---|---|
@@ -10,7 +12,7 @@ fails if it regresses. Invariant 6's reliability half is **unverified**.
 | 3 | `corpus.lock.json` is enforced by SHA-256; ingest refuses a mismatched or unlisted file | `src/docqa/ingest/lock.py:82` (`verify_file`), `:92` (digest check) | `tests/test_lock.py`, `tests/test_cli_and_corpus_script.py` |
 | 4 | The refusal threshold comes from `eval/calibration.json` (`{a,b,threshold,fit_set_sha256}`), loaded at boot, never hand-tuned | `src/docqa/answer.py:216` (`load_calibration`); artifact `eval/calibration.json` | `tests/test_refusal.py` |
 | 5 | Every rate prints a Wilson 95% CI and its denominator; `stage_failed` is recorded per question | `src/docqa/eval.py:101` (`wilson_interval`), `:365` (`stage_failed`), `:585` (stage counts) | `tests/test_eval.py` |
-| 6 | The judge model differs from the generator and is pinned by exact id; reliability (Cohen's κ) must be measured before any judge score is claimed | `src/docqa/cli.py:31` (`JUDGE_REQUIRED`), `:254` (`_run_judge_check`), `eval/judge.yaml` | `tests/test_judge_check.py`; **κ unverified** — no endpoint or human anchor set |
+| 6 | The judge model differs from the generator and is pinned by exact id; it is never replaced by the generator when unavailable | `src/docqa/judge.py` (`probe_judge`), `src/docqa/cli.py` (`JUDGE_REQUIRED`), `eval/judge.yaml`, `eval/judge-status.json` | `tests/test_judge_check.py`, `tests/test_judge_probe.py`; **κ not computed** — 30 question labels, 0 human judge labels |
 | 7 | ONNX work runs in `anyio.to_thread.run_sync` behind `Semaphore(2)` | `src/docqa/onnx.py:12`, `:15` (`onnx_semaphore`), `:19` (`Semaphore(2)`) | `tests/test_embedder.py` |
 
 The production calibration is fitted on the human gold questions by

@@ -159,11 +159,13 @@ environment. No key is committed; `.env` is gitignored.
 | variable | default | meaning |
 |---|---|---|
 | `DOCQA_MODEL_BASE_URL` | unset | OpenAI-compatible base URL; unset ⇒ extractive fallback |
-| `DOCQA_MODEL_API_KEY` | unset | bearer token; empty for the keyless endpoint |
-| `DOCQA_MODEL_NAME` | `claude-sonnet-5-5` | model id sent in the request body |
-| `DOCQA_MODEL_TIMEOUT_S` | `60` | per-request HTTP timeout |
-| `DOCQA_MODEL_MIN_INTERVAL_S` | `31` | minimum seconds between request **starts** to one endpoint (one call in flight) |
-| `DOCQA_MODEL_MAX_RETRIES` | `2` | retries after HTTP 429 before `RateLimitedError` |
+| `DOCQA_MODEL_API_KEY` | unset | bearer token for the keyed endpoint |
+| `DOCQA_JUDGE_API_KEY` | falls back to `DOCQA_MODEL_API_KEY` | bearer token for the judge probe |
+| `DOCQA_MODEL_NAME` | `claude-sonnet-5-5` | primary model id sent in the request body |
+| `DOCQA_MODEL_FALLBACK_NAMES` | unset | comma-separated retry ids tried in order after the primary fails |
+| `DOCQA_MODEL_TIMEOUT_S` | `180` | per-request HTTP timeout; a timeout is retried with backoff |
+| `DOCQA_MODEL_MIN_INTERVAL_S` | `20` | minimum seconds between request **starts** to one endpoint (one call in flight) |
+| `DOCQA_MODEL_MAX_RETRIES` | `2` | retries after HTTP 429/503 or a timeout before the call fails or moves down the model chain |
 | `DOCQA_MODEL_RETRY_BACKOFF_S` | `5` | base backoff; retries wait 5 s then 10 s (or `Retry-After`, if larger) |
 | `DOCQA_STRUCTURED_OUTPUT` | `auto` | `auto` = read the probe artifact; `tool`/`json` force a mode |
 | `DOCQA_STRUCTURED_OUTPUT_PROBE` | `eval/structured-output.json` | recorded probe artifact |
@@ -171,25 +173,31 @@ environment. No key is committed; `.env` is gitignored.
 | `DOCQA_CALIBRATION` | `eval/calibration.json` | refusal calibration artifact |
 | `DOCQA_FORCE_GENERATION` | `0` | **diagnostic only**: when `1`/`true`, `docqa eval`, `ask` and `warm` skip the calibrated low-score refusal so the model's own answer rate is measurable. Citation validation still runs. The API ignores it, and a forced eval is written to `eval-report-forced.json` with `gate_run: false` and exits 0 |
 
-### Free endpoint used
+### Keyed endpoint used
 
 | field | value |
 |---|---|
-| base URL | `https://text.pollinations.ai/openai` |
-| model id | `openai-fast` (the response reports `gpt-oss-20b`) |
-| auth | none; `DOCQA_MODEL_API_KEY` is empty |
-| limit | anonymous tier: about one answer per 30 s per IP |
-| measured 2026-10-23 | probe 0.782 s (re-run; first probe 6.28 s); 30-question production eval 778.6 s (26 requests, 0 retries, 0 rate limits); forced diagnostic 916.4 s (30 requests) |
-| demo cache | `data/demo-answers.json`, six entries generated 2026-10-23T17:29:10Z |
+| base URL | `https://generativelanguage.googleapis.com/v1beta/openai/` |
+| primary model id | `gemini-flash-lite-latest` |
+| first retry id | `gemini-3.8-flash` (then the run fails loudly) |
+| auth | `Authorization: Bearer $DOCQA_MODEL_API_KEY`; the key lives in `P:/portfolio/.secrets/model.env`, never in a committed file or log |
+| free-tier behaviour | one request at a time; request starts spaced by `DOCQA_MODEL_MIN_INTERVAL_S`; cold starts and demand spikes surface as 503 or a timeout, both retried with exponential backoff |
+| probe | `bash scripts/live.sh probe --json` → `mode: "tool"`, `tool_call_returned: true`, 14.531 s; artifact `eval/structured-output.json` |
 
-The client serialises every call and spaces request starts by at least 31 s.
-A 429 is retried twice with 5 s / 10 s backoff; if it still fails the call
-raises `RateLimitedError`, which the API returns as HTTP 429 with
-`"state": "rate_limited"` and the eval records per question. There is no silent
-fallback to the extractive model when a live endpoint is configured.
+`scripts/live.sh` reads `P:/portfolio/.secrets/model.env` when present, strips
+`\r` and surrounding quotes, exports `DOCQA_MODEL_API_KEY` and
+`DOCQA_JUDGE_API_KEY`, and refuses with exit 2 when the key is absent. The
+former keyless public endpoint was removed; it was a stand-in, not a fallback.
 
-`bash scripts/live.sh <command…>` exports the variables above and runs
-`uv run <command…>`; it contains no secret.
+The client serialises every call and spaces request starts by at least 20 s.
+HTTP 429/503 and timeouts are retried twice with 5 s / 10 s backoff; when the
+primary id still fails, the documented retry id is tried with the same
+discipline, and then the call fails loudly. There is no silent fallback to the
+extractive model when a live endpoint is configured. The judge probe uses the
+same endpoint, the same backoff and a different exact model id; if it cannot
+answer, `provenance.judge.status` is `judge_model_unavailable`, the exact HTTP
+status of each attempt is recorded, and the rule-based metric stays the
+reported one.
 
 ### Measured run cost and demo cache
 
@@ -215,22 +223,21 @@ exact-question hit with `cached: true` and
 HTTP 429 `{"state": "rate_limited", …}` when the anonymous window is closed
 rather than a 500.
 
-### Probe verdict (real endpoint)
+### Probe verdict (keyed endpoint)
 
-`bash scripts/live.sh probe --json` was re-run on 2026-10-23T18:25:30Z
-against the live endpoint:
+`bash scripts/live.sh probe --json` against the keyed endpoint:
 
 ```json
 {
-  "checked_at": "2026-10-23T18:25:30.639502+00:00",
+  "checked_at": "2026-10-29T14:52:58.958034+00:00",
   "detail": "gateway returned the forced submit_answer call",
-  "endpoint": "https://text.pollinations.ai/openai",
+  "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai",
   "json_mode_ok": null,
   "mode": "tool",
-  "model": "openai-fast",
+  "model": "gemini-flash-lite-latest",
   "tool_call_returned": true,
   "tool_choice_sent": true,
-  "wall_clock_s": 0.782
+  "wall_clock_s": 14.531
 }
 ```
 
@@ -245,18 +252,15 @@ request, records `mode: "json"`, and exits `5`. See
 
 ### Live answer check
 
-`bash scripts/live.sh ask --question "How many identical layers are in the Transformer encoder stack?"`
-returned a validated answer on 2026-10-23, re-run at 18:25 UTC with the
-gold-fitted threshold `0.6361`:
+`bash scripts/live.sh ask --question "How many identical layers are in the Transformer encoder stack?" --json`
+returned a validated answer against the keyed endpoint with the gold-fitted
+threshold `0.6361`. The response carried both ids:
 
 ```
-Model: openai-compatible:openai-fast (tool)
-Calibration: threshold=0.6360770752477083 uncalibrated=False
-Result: answered with 1 validated claim(s)
-Claim 1: The Transformer encoder stack contains 6 identical layers.
-  citation: attention-is-all-you-need p3 chars 24-1905
-            sha256=fa1c282a95102f92170c170b3da828911442465996b6ce6635ffe25e7998b35d
-            quote='Encoder:  The encoder is composed of a stack of N = 6 identical layers.'
+requested: gemini-flash-lite-latest
+answered : gemini-flash-lite-latest
+model    : openai-compatible:gemini-flash-lite-latest (retry gemini-3.8-flash)
+Result   : answered with 1 validated claim(s)
 Validation: returned=1 kept=1 dropped=0 schema_failures=0
 ```
 
