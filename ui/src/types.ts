@@ -126,6 +126,28 @@ export interface AskResponse {
   citation_render_miss: number;
 }
 
+/** A visitor upload, as `GET /documents/{id}` reports it. */
+export type UploadStatus =
+  | 'queued'
+  | 'parsing'
+  | 'embedding'
+  | 'ready'
+  | 'failed';
+
+export interface UploadDocument {
+  id: string;
+  status: UploadStatus;
+  collection: string;
+  filename: string;
+  byte_size: number;
+  pages_done: number;
+  pages_total: number | null;
+  error_code: string | null;
+  error_detail: string | null;
+  created_at: string;
+  expires_at: string;
+}
+
 /** One row of `ui/src/fixtures/citations.json`. */
 export interface FixtureCitation extends Citation {
   id: string;

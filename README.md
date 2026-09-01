@@ -49,6 +49,20 @@ Citation contract: `(doc_id, page_no, char_start, char_end, page_text_sha256, qu
 
 The UI opens the real Sentence-BERT paper from the corpus (`ui/public/papers/sentence-bert.pdf`; licence in `docs/CORPUS.md`) with recorded extractive answers in `ui/src/fixtures/real-paper.json`; every quote is re-checked against the committed PDF by `ui/scripts/verify_demo_paper.mjs`. `ui/src/fixtures/demo-answer.json` is only the offline fallback when the API is unreachable. The screenshots use this seeded data; no live model call was made. The eval numbers use the real locked corpus, not this fixture.
 
+## Visitor uploads
+
+A visitor can drop a PDF on the page instead of asking the seeded paper. The
+bytes are stored in Postgres and parsed outside the request loop by a worker
+under a 90 s timeout; the page polls `queued → parsing (n/m) → embedding →
+ready`, then opens the visitor's own PDF in the same two-pane reader and asks
+against that document's collection only. Limits: 25 MB, 80 pages, three
+uploads per browser per 24 hours, one at a time, and one store-wide upload
+window of 20 per hour.
+
+**Uploaded text is sent to a third-party model on a free tier. The provider may
+use it to improve its products. Do not upload confidential documents.**
+Uploaded documents are deleted after 24 hours.
+
 ## Commands
 
 ```sh

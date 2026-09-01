@@ -9,6 +9,7 @@ import {
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
 import { extractPage, resolveQuote, type ExtractedPage } from '../pdfText';
+import { pdfSourceOptions } from '../pdfSource';
 import type { Citation, Rect } from '../types';
 
 GlobalWorkerOptions.workerSrc = workerSrc;
@@ -177,7 +178,7 @@ export function PdfPane({
 
   useEffect(() => {
     let cancelled = false;
-    const task = getDocument({ url: pdfUrl, verbosity: 0 });
+    const task = getDocument(pdfSourceOptions(pdfUrl));
     task.promise
       .then((loaded) => {
         if (!cancelled) {

@@ -27,6 +27,8 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
-    css: false,
+    // CSS is processed so `styles.css?raw` exposes the rules the tests assert
+    // on (the disclosure must stay at the button's type size).
+    css: true,
   },
 });
