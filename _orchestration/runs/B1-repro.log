@@ -1,0 +1,1 @@
+dropped claim reason=quote_mismatch citation_ids=['309'] text="BERT's training data generator chooses 15% of the token positions at random for prediction."

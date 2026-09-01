@@ -91,6 +91,31 @@ class FakeModel:
         )
 
 
+class FallbackAwareModel:
+    """Serves a tool-mode payload, then a JSON-mode payload on the retry."""
+
+    name = "fake:fallback-aware"
+    structured_output: Literal["tool", "json", "extractive"] = "tool"
+
+    def __init__(self, primary: object, fallback: object) -> None:
+        self._primary = primary
+        self._fallback = fallback
+        self.requests: list[ModelRequest] = []
+
+    async def complete(self, request: ModelRequest) -> ModelReply:
+        self.requests.append(request)
+        mode = request.structured_output or "tool"
+        payload = self._fallback if mode == "json" else self._primary
+        return ModelReply(
+            payload=payload,
+            raw_text=json.dumps(payload),
+            via_tool_call=mode == "tool",
+            http_status=200,
+            structured_mode="json" if mode == "json" else "tool",
+            finish_reason="stop",
+        )
+
+
 def _claim(
     text: str,
     citation_ids: Sequence[object],
@@ -279,6 +304,106 @@ async def test_schema_failure_gets_exactly_one_repair_turn() -> None:
     assert response.validation.repair_turns == 1
     assert response.validation.schema_failures == 1
     assert len(response.claims) == 1
+
+
+async def test_schema_failure_retries_once_in_json_fallback() -> None:
+    """The tool-mode primary gets exactly one JSON-only retry on a schema error."""
+    model = FallbackAwareModel(
+        {"claims": "not-an-array", "insufficient_evidence": False},
+        {
+            "claims": [_claim("Recovered claim.", ["7"], QUOTE)],
+            "insufficient_evidence": False,
+        },
+    )
+    response = await answer_question(
+        "How are tokens represented?",
+        [_chunk(7)],
+        model=model,
+        calibration=_calibration(),
+    )
+
+    assert [request.structured_output for request in model.requests] == [None, "json"]
+    assert model.requests[1].repair_errors
+    assert response.structured_mode == "json-fallback"
+    assert response.validation.schema_failures == 1
+    assert response.validation.repair_turns == 1
+    assert response.insufficient_evidence is False
+    assert len(response.claims) == 1
+    assert response.failure is None
+
+
+async def test_quote_mismatch_does_not_trigger_the_json_fallback() -> None:
+    """A citation-contract drop is not a schema failure and gets no retry."""
+    model = FallbackAwareModel(
+        {
+            "claims": [
+                _claim(
+                    "A paraphrased claim.",
+                    ["7"],
+                    "the encoder maps tokens to representations",
+                )
+            ],
+            "insufficient_evidence": False,
+        },
+        {"claims": [], "insufficient_evidence": True},
+    )
+    response = await answer_question(
+        "How are tokens represented?",
+        [_chunk(7)],
+        model=model,
+        calibration=_calibration(),
+    )
+
+    assert len(model.requests) == 1
+    assert response.structured_mode == "tool"
+    assert response.failure is not None
+    assert response.failure.reason == "quote_mismatch"
+    assert response.failure.validation.dropped_quote_mismatch == 1
+    assert response.failure.http_status == 200
+    assert response.failure.finish_reason == "stop"
+
+
+async def test_json_fallback_that_also_fails_refuses_once() -> None:
+    """Two schema failures: one primary attempt and one fallback, then refusal."""
+    bad: dict[str, object] = {"claims": "not-an-array", "insufficient_evidence": False}
+    model = FallbackAwareModel(bad, dict(bad))
+    response = await answer_question(
+        "How are tokens represented?",
+        [_chunk(7)],
+        model=model,
+        calibration=_calibration(),
+    )
+
+    assert len(model.requests) == 2
+    assert response.insufficient_evidence is True
+    assert response.reason == "validation_failed"
+    assert response.structured_mode == "json-fallback"
+    assert response.validation.schema_failures == 2
+    assert response.validation.repair_turns == 1
+    assert response.failure is not None
+    assert response.failure.reason == "schema_parse_error"
+    assert response.failure.parse_errors
+
+
+async def test_successful_tool_attempt_records_its_mode() -> None:
+    model = FakeModel(
+        [
+            {
+                "claims": [_claim("The encoder is continuous.", ["7"], QUOTE)],
+                "insufficient_evidence": False,
+            }
+        ]
+    )
+    response = await answer_question(
+        "How are tokens represented?",
+        [_chunk(7)],
+        model=model,
+        calibration=_calibration(),
+    )
+
+    assert len(model.requests) == 1
+    assert response.structured_mode == "tool"
+    assert response.failure is None
 
 
 async def test_second_schema_failure_refuses_with_closest_two_passages() -> None:
