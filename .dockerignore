@@ -1,0 +1,25 @@
+# Keep the build context to what the API image needs.
+.git
+.gitignore
+.github
+.venv
+__pycache__
+*.py[cod]
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.superpowers
+_orchestration
+node_modules
+ui
+docs
+tests
+data/corpus
+data/abs-*.html
+data/_*.pdf
+.env
+.env.*
+*.log
+*.pem
+*.key

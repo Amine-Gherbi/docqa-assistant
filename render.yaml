@@ -1,0 +1,54 @@
+# Reproducible description of the hosted pair. The services were created through
+# the Render API; this file documents the same configuration for a rebuild.
+#
+# Secrets are deliberately `sync: false`: Render prompts for them and never
+# reads them from this repository.
+services:
+  - type: web
+    name: marginalia-api
+    runtime: docker
+    plan: free
+    region: frankfurt
+    branch: w2-b-hosting
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: false
+    # Runs in the built image before traffic moves; a failure aborts the deploy.
+    preDeployCommand: alembic upgrade head && docqa ingest --check
+    envVars:
+      - key: DOCQA_DATABASE_URL
+        sync: false
+      - key: DOCQA_MODEL_API_KEY
+        sync: false
+      - key: DOCQA_MODEL_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta/openai
+      - key: DOCQA_MODEL_NAME
+        value: gemini-flash-lite-latest
+      - key: DOCQA_MODEL_FALLBACK_NAMES
+        value: gemini-3.8-flash
+      - key: DOCQA_CORS_ORIGINS
+        value: https://marginalia-ui.onrender.com
+      - key: DOCQA_EMBEDDER
+        value: fastembed
+      - key: DOCQA_RERANKER
+        value: fastembed
+      - key: DOCQA_STRUCTURED_OUTPUT
+        value: tool
+      - key: PORT
+        value: "8788"
+
+  - type: web
+    name: marginalia-ui
+    runtime: static
+    branch: w2-b-hosting
+    buildCommand: cd ui && npm ci && npm run build
+    staticPublishPath: ui/dist
+    autoDeploy: false
+    envVars:
+      - key: VITE_API_BASE
+        value: https://marginalia-api.onrender.com/
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

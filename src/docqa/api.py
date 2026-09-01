@@ -74,7 +74,10 @@ class PgRetriever:
         self._embedder = embedder_choice.embedder
         LOGGER.info("%s", embedder_choice.banner)
         rerank_mode = os.environ.get("DOCQA_RERANKER", "auto").strip().lower()
-        rerank_choice = build_reranker(mode=rerank_mode)
+        rerank_choice = build_reranker(
+            mode=rerank_mode,
+            cache_dir=str(settings.hf_cache_dir) if settings.hf_cache_dir else None,
+        )
         self._reranker = rerank_choice.reranker
         LOGGER.info("%s", rerank_choice.banner)
 
@@ -187,7 +190,7 @@ def create_app(
     application.state.answer_cache = chosen_cache
     application.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_origins=list(resolved.cors_origins),
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )

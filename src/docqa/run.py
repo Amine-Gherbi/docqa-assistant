@@ -44,7 +44,8 @@ class ProductionAnswerer:
         """Build the collaborators; the database is contacted per question."""
         embedder_choice = build_embedder(settings)
         reranker_choice = build_reranker(
-            mode=os.environ.get("DOCQA_RERANKER", "auto").strip().lower()
+            mode=os.environ.get("DOCQA_RERANKER", "auto").strip().lower(),
+            cache_dir=str(settings.hf_cache_dir) if settings.hf_cache_dir else None,
         )
         self.embedder_banner = embedder_choice.banner
         self.reranker_banner = reranker_choice.banner

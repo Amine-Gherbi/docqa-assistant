@@ -16,6 +16,15 @@ export const FIXTURE_CITATIONS: readonly FixtureCitation[] =
   CITATION_FIXTURE.citations;
 export const FIXTURE_PAGE_COUNT = CITATION_FIXTURE.pages.length;
 
+const offlineFixtureAllowed =
+  import.meta.env.DEV || import.meta.env.VITE_DEMO === '1';
+
+if (!offlineFixtureAllowed) {
+  throw new Error(
+    'The offline demo fixture is only available in development or with VITE_DEMO=1.',
+  );
+}
+
 /**
  * The synthetic demo answer is kept for deterministic quote-resolution tests.
  * The running UI uses the real paper in `demoPaper.ts` instead.

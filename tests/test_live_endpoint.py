@@ -28,7 +28,7 @@ from docqa.answer import (
     ValidationReport,
     probe_structured_output,
 )
-from docqa.api import create_app
+from docqa.api import PgRetriever, create_app
 from docqa.cache import (
     AnswerCache,
     CachedAnswer,
@@ -366,6 +366,80 @@ def test_api_serves_a_cached_answer_with_model_and_date(tmp_path: Path) -> None:
     assert body["cached"] is True
     assert body["cache"] == {"model": entry.model, "generated_at": timestamp}
     assert body["insufficient_evidence"] is True
+
+
+def test_pg_retriever_passes_the_model_cache_to_the_reranker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The hosted image prefetches both models into DOCQA_HF_CACHE."""
+    from docqa.ingest.embedder import EmbedderChoice
+    from docqa.rerank import RerankerChoice
+
+    class FakeEmbedder:
+        name = "fake:embedder"
+        is_dummy = False
+        dim = 384
+
+        async def embed(self, texts: list[str]) -> list[list[float]]:
+            return [[0.0] * 384 for _ in texts]
+
+        async def embed_query(self, texts: list[str]) -> list[list[float]]:
+            return [[0.0] * 384 for _ in texts]
+
+    class FakeReranker:
+        name = "fake:reranker"
+        is_dummy = False
+
+        async def score(self, query: str, passages: list[str]) -> list[float]:
+            return [0.0 for _ in passages]
+
+    captured: dict[str, object] = {}
+
+    def fake_build_reranker(**kwargs: object) -> RerankerChoice:
+        captured.update(kwargs)
+        return RerankerChoice(FakeReranker(), requested="fastembed", fallback_reason=None)
+
+    monkeypatch.setenv("DOCQA_HF_CACHE", str(tmp_path))
+    monkeypatch.setattr(
+        "docqa.api.build_embedder",
+        lambda settings: EmbedderChoice(
+            FakeEmbedder(), requested="fastembed", fallback_reason=None
+        ),
+    )
+    monkeypatch.setattr("docqa.api.build_reranker", fake_build_reranker)
+    monkeypatch.setattr("docqa.api.make_engine", lambda settings: object())
+    monkeypatch.setattr("docqa.api.make_session_factory", lambda engine: object())
+
+    PgRetriever(get_settings())
+
+    assert captured["cache_dir"] == str(tmp_path)
+
+
+def test_api_cors_uses_the_configured_ui_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The hosted UI origin is admitted explicitly, not by a wildcard."""
+    monkeypatch.setenv("DOCQA_CORS_ORIGINS", "https://marginalia-ui.onrender.com")
+    app = create_app(
+        calibration=_calibration(),
+        model=NeverCalledModel(),
+        retriever=_retriever,
+        answer_cache=AnswerCache.empty(Path("missing-demo-answers.json")),
+    )
+    with TestClient(app) as client:
+        response = client.options(
+            "/ask",
+            headers={
+                "Origin": "https://marginalia-ui.onrender.com",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+
+    assert response.status_code == 200
+    assert (
+        response.headers["access-control-allow-origin"]
+        == "https://marginalia-ui.onrender.com"
+    )
 
 
 def test_api_cache_miss_reports_rate_limited_not_500() -> None:
