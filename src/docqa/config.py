@@ -56,6 +56,12 @@ class Settings:
     structured_output_source: str = "default"
     demo_answers_path: Path = DEFAULT_DEMO_ANSWERS_PATH
     cors_origins: tuple[str, ...] = DEFAULT_CORS_ORIGINS
+    # ONNX Runtime sizes its per-thread arenas from the visible CPU count. On a
+    # free instance (0.1 CPU, 512 MB) that over-allocates; set to 1 there.
+    onnx_threads: int | None = None
+    # The cross-encoder pads every pair in a batch to 512 tokens. A batch of 24
+    # needs a ~300 MB attention tensor; one at a time keeps the peak small.
+    rerank_batch_size: int = 64
     # Diagnostic only: bypasses the calibrated low-score refusal so the model's
     # own answer rate can be measured. Never use it for a gate run.
     force_generation: bool = False
@@ -117,6 +123,20 @@ def _retries_from_environment() -> int:
         raise ValueError("DOCQA_MODEL_MAX_RETRIES must be an integer") from exc
     if value < 0:
         raise ValueError("DOCQA_MODEL_MAX_RETRIES must not be negative")
+    return value
+
+
+def _onnx_threads_from_environment() -> int | None:
+    """Read ``DOCQA_ONNX_THREADS``; unset keeps ONNX Runtime's own default."""
+    raw = os.environ.get("DOCQA_ONNX_THREADS", "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("DOCQA_ONNX_THREADS must be an integer") from exc
+    if value < 1:
+        raise ValueError("DOCQA_ONNX_THREADS must be at least 1")
     return value
 
 
@@ -295,5 +315,6 @@ def get_settings() -> Settings:
         cors_origins=cors_origins_from_environment(
             os.environ.get("DOCQA_CORS_ORIGINS")
         ),
+        onnx_threads=_onnx_threads_from_environment(),
         force_generation=_boolean_from_environment("DOCQA_FORCE_GENERATION"),
     )
