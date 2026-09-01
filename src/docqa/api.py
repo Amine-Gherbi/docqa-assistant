@@ -17,17 +17,20 @@ import dataclasses
 import json
 import logging
 import os
+import secrets
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import cast
+from typing import Annotated, Literal, cast
 
 import anyio
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from docqa.answer import (
     AnswerResponse,
@@ -40,14 +43,14 @@ from docqa.answer import (
     load_calibration,
 )
 from docqa.cache import AnswerCache, trace_payload
-from docqa.config import PROJECT_ROOT, Settings, get_settings
+from docqa.config import DEMO_COLLECTION, PROJECT_ROOT, Settings, get_settings
 from docqa.db import (
     alembic_config,
     make_engine,
     make_session_factory,
     session_scope,
 )
-from docqa.ingest.embedder import build_embedder
+from docqa.ingest.embedder import Embedder, build_embedder
 from docqa.rerank import Reranker, RerankerChoice, build_reranker
 from docqa.retrieval import (
     PgCandidateSource,
@@ -56,6 +59,17 @@ from docqa.retrieval import (
     RetrievedChunk,
     retrieve_with_trace,
 )
+from docqa.uploads.limits import UploadLimitError
+from docqa.uploads.service import (
+    UploadBusyError,
+    UploadQuotaError,
+    UploadService,
+    UploadView,
+)
+from docqa.uploads.service import (
+    UploadFile as UploadDownload,
+)
+from docqa.uploads.session import CLIENT_COOKIE, COOKIE_MAX_AGE_S, SessionSigner
 
 LOGGER = logging.getLogger(__name__)
 
@@ -63,12 +77,16 @@ DEFAULT_K = 8
 
 Retriever = Callable[[str], Awaitable[list[RetrievedChunk]]]
 TraceRetriever = Callable[[str], Awaitable[RetrievalResult]]
+CollectionTraceRetriever = Callable[[str, str], Awaitable[RetrievalResult]]
 
 
 class AskPayload(BaseModel):
     """Request body for ``POST /ask``."""
 
     question: str = Field(min_length=1, max_length=2000)
+    collection: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$"
+    )
 
 
 def corpus_document_count(lock_path: Path) -> int | None:
@@ -203,20 +221,32 @@ class PgRetriever:
                 self._reranker = choice.reranker
         return self._reranker
 
-    async def retrieve_result(self, question: str) -> RetrievalResult:
-        """Run the R2 pipeline and return the context plus its trace."""
+    @property
+    def embedder(self) -> Embedder:
+        """The resident embedder, shared with the upload worker."""
+        return self._embedder
+
+    @property
+    def session_factory(self) -> async_sessionmaker[AsyncSession]:
+        """The process's session factory, shared with the upload service."""
+        return self._factory
+
+    async def retrieve_result(
+        self, question: str, collection: str = DEMO_COLLECTION
+    ) -> RetrievalResult:
+        """Run the R2 pipeline over one collection and return context plus trace."""
         reranker = await self._ensure_reranker()
         async with session_scope(self._factory) as session:
             return await retrieve_with_trace(
                 question,
                 DEFAULT_K,
                 embedder=self._embedder,
-                source=PgCandidateSource(session),
+                source=PgCandidateSource(session, collection),
                 reranker=reranker,
             )
 
     async def __call__(self, question: str) -> list[RetrievedChunk]:
-        """Run the R2 pipeline and return the final context."""
+        """Run the R2 pipeline over the demo corpus and return the context."""
         result = await self.retrieve_result(question)
         return list(result.chunks)
 
@@ -229,6 +259,7 @@ class AnswerService:
     model: StructuredModel
     calibration: Calibration
     trace_retriever: TraceRetriever | None = None
+    collection_trace_retriever: CollectionTraceRetriever | None = None
 
     async def answer(self, question: str) -> AnswerResponse:
         """Retrieve, generate, validate, and return the response."""
@@ -236,17 +267,26 @@ class AnswerService:
         return response
 
     async def answer_with_trace(
-        self, question: str
+        self, question: str, collection: str | None = None
     ) -> tuple[AnswerResponse, RetrievalTrace | None]:
         """Answer and return the retrieval trace that produced the context.
 
         A retriever injected by a test has no trace; the response then carries
-        ``trace: null`` rather than inventing stage numbers.
+        ``trace: null`` rather than inventing stage numbers. A named
+        ``collection`` must use the collection-aware retriever; falling back to
+        the demo one would mix another corpus into the answer.
         """
-        if self.trace_retriever is not None:
+        trace: RetrievalTrace | None
+        if collection is not None:
+            if self.collection_trace_retriever is None:
+                raise RuntimeError("no collection-aware retriever is configured")
+            result = await self.collection_trace_retriever(question, collection)
+            chunks = list(result.chunks)
+            trace = result.trace
+        elif self.trace_retriever is not None:
             result = await self.trace_retriever(question)
             chunks = list(result.chunks)
-            trace: RetrievalTrace | None = result.trace
+            trace = result.trace
         else:
             chunks = await self.retriever(question)
             trace = None
@@ -254,6 +294,100 @@ class AnswerService:
             question, chunks, model=self.model, calibration=self.calibration
         )
         return response, trace
+
+
+
+# -- upload helpers -------------------------------------------------------
+
+
+def _upload_service(request: Request) -> UploadService:
+    """Return the process's upload service or fail with 503."""
+    service = cast(UploadService | None, request.app.state.upload_service)
+    if service is None:
+        raise HTTPException(status_code=503, detail="uploads are not available")
+    return service
+
+
+def _require_origin(request: Request) -> None:
+    """Reject a cookie-bearing request from an origin the browser would not trust."""
+    settings = cast(Settings, request.app.state.settings)
+    origin = (request.headers.get("origin") or "").rstrip("/")
+    if origin and origin not in settings.cors_origins:
+        raise HTTPException(status_code=403, detail="origin not allowed")
+
+
+def _session_signer(request: Request) -> SessionSigner:
+    """Return the cookie signer bound to this app."""
+    return cast(SessionSigner, request.app.state.upload_signer)
+
+
+def _client_or_none(request: Request) -> str | None:
+    """Return the signed client id, or ``None`` for a missing or forged cookie."""
+    return _session_signer(request).verify(request.cookies.get(CLIENT_COOKIE))
+
+
+def _require_client(request: Request) -> str:
+    """Return the signed client id; absent or forged cookies are refused."""
+    client_id = _client_or_none(request)
+    if client_id is None:
+        raise HTTPException(status_code=401, detail="start a session first")
+    return client_id
+
+
+def _parse_upload_id(raw: str) -> uuid.UUID:
+    """Parse a path id, treating anything malformed as unknown."""
+    try:
+        return uuid.UUID(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="unknown document") from exc
+
+
+def _set_client_cookie(
+    response: Response, request: Request, signer: SessionSigner, client_id: str
+) -> None:
+    """Set the signed cookie; a cross-origin HTTPS UI needs Secure + SameSite=None."""
+    settings = cast(Settings, request.app.state.settings)
+    secure = settings.cookie_secure or request.url.scheme == "https"
+    same_site: Literal["none", "lax"] = "none" if secure else "lax"
+    response.set_cookie(
+        CLIENT_COOKIE,
+        signer.token_for(client_id),
+        max_age=COOKIE_MAX_AGE_S,
+        httponly=True,
+        secure=secure,
+        samesite=same_site,
+        path="/",
+    )
+
+
+def _limit_response(exc: UploadLimitError) -> JSONResponse:
+    """Map a refused upload onto its documented status and code."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "state": "rejected",
+            "code": exc.code,
+            "detail": exc.detail,
+            "limit": exc.limit,
+        },
+    )
+
+
+def _upload_payload(view: UploadView) -> dict[str, object]:
+    """Return the JSON shape shared by ``POST /documents`` and its status route."""
+    return {
+        "id": view.id,
+        "status": view.status,
+        "collection": view.collection,
+        "filename": view.filename,
+        "byte_size": view.byte_size,
+        "pages_done": view.pages_done,
+        "pages_total": view.pages_total,
+        "error_code": view.error_code,
+        "error_detail": view.error_detail,
+        "created_at": view.created_at.isoformat(),
+        "expires_at": view.expires_at.isoformat(),
+    }
 
 
 def create_app(
@@ -265,8 +399,11 @@ def create_app(
     model: StructuredModel | None = None,
     retriever: Retriever | None = None,
     trace_retriever: TraceRetriever | None = None,
+    collection_retriever: CollectionTraceRetriever | None = None,
     answer_cache: AnswerCache | None = None,
     cache_path: Path | None = None,
+    upload_service: UploadService | None = None,
+    upload_signer: SessionSigner | None = None,
 ) -> FastAPI:
     """Create the application, refusing to boot without a usable calibration.
 
@@ -295,11 +432,24 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
+        started: UploadService | None = None
         if application.state.retriever is None:
             production = PgRetriever(resolved)
             application.state.retriever = production
             application.state.trace_retriever = production.retrieve_result
-        yield
+            application.state.collection_retriever = production.retrieve_result
+            if application.state.upload_service is None:
+                service = UploadService(
+                    resolved, production.session_factory, production.embedder
+                )
+                application.state.upload_service = service
+                await service.start()
+                started = service
+        try:
+            yield
+        finally:
+            if started is not None:
+                await started.stop()
 
     application = FastAPI(
         title="docqa-assistant",
@@ -312,12 +462,24 @@ def create_app(
     application.state.model = chosen_model
     application.state.retriever = retriever
     application.state.trace_retriever = trace_retriever
+    application.state.collection_retriever = collection_retriever
     application.state.answer_cache = chosen_cache
+    application.state.upload_service = upload_service
+    secret = resolved.cookie_secret or secrets.token_hex(32)
+    if resolved.cookie_secret is None:
+        LOGGER.warning(
+            "DOCQA_COOKIE_SECRET is unset; using a per-process secret, so "
+            "sessions do not survive a restart"
+        )
+    application.state.upload_signer = (
+        upload_signer if upload_signer is not None else SessionSigner(secret)
+    )
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved.cors_origins),
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
+        allow_credentials=True,
     )
 
     @application.get("/health")
@@ -351,23 +513,134 @@ def create_app(
         )
         return JSONResponse(payload, status_code=status_code)
 
+    @application.get("/session")
+    async def create_session(request: Request) -> JSONResponse:
+        """Mint or keep an opaque client id, signed into an HttpOnly cookie."""
+        _require_origin(request)
+        signer = _session_signer(request)
+        client_id, is_new = signer.session_for(request.cookies.get(CLIENT_COOKIE))
+        response = JSONResponse({"client_id": client_id, "new": is_new})
+        _set_client_cookie(response, request, signer, client_id)
+        return response
+
+    @application.post("/documents", status_code=202)
+    async def create_document(
+        request: Request, file: Annotated[UploadFile, File()]
+    ) -> JSONResponse:
+        """Store an upload's bytes and return before parsing starts."""
+        _require_origin(request)
+        service = _upload_service(request)
+        client_id = _require_client(request)
+        raw = await file.read(resolved.upload_max_bytes + 1)
+        if len(raw) > resolved.upload_max_bytes:
+            return _limit_response(
+                UploadLimitError(
+                    413,
+                    "too_large",
+                    f"The PDF is larger than {resolved.upload_max_bytes} bytes.",
+                    limit=resolved.upload_max_bytes,
+                )
+            )
+        try:
+            view = await service.submit(
+                client_id,
+                file.filename or "upload.pdf",
+                file.content_type or "application/pdf",
+                raw,
+            )
+        except UploadLimitError as exc:
+            return _limit_response(exc)
+        except UploadBusyError as exc:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "state": "busy",
+                    "id": exc.upload_id,
+                    "status": exc.status,
+                    "detail": "This browser already has an upload in progress.",
+                },
+            )
+        except UploadQuotaError as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                headers={"Retry-After": str(exc.retry_after_s)},
+                content={
+                    "state": "rate_limited",
+                    "code": exc.code,
+                    "detail": exc.detail,
+                    "retry_after_s": exc.retry_after_s,
+                    "reset_at": exc.reset_at.isoformat(),
+                },
+            )
+        return JSONResponse(status_code=202, content=_upload_payload(view))
+
+    @application.get("/documents/{upload_id}")
+    async def document_status(upload_id: str, request: Request) -> JSONResponse:
+        """Report one upload's stage and page progress to its owner."""
+        _require_origin(request)
+        service = _upload_service(request)
+        client_id = _require_client(request)
+        view = await service.status(client_id, _parse_upload_id(upload_id))
+        if view is None:
+            raise HTTPException(status_code=404, detail="unknown document")
+        return JSONResponse(_upload_payload(view))
+
+    @application.get("/documents/{upload_id}/pages/{page_no}")
+    async def document_page(
+        upload_id: str, page_no: int, request: Request
+    ) -> JSONResponse:
+        """Serve one stored page's text to the owning client only."""
+        _require_origin(request)
+        service = _upload_service(request)
+        client_id = _require_client(request)
+        if page_no < 1:
+            raise HTTPException(status_code=404, detail="unknown page")
+        text = await service.page(client_id, _parse_upload_id(upload_id), page_no)
+        if text is None:
+            raise HTTPException(status_code=404, detail="unknown page")
+        return JSONResponse({"page_no": page_no, "text": text})
+
+    @application.get("/documents/{upload_id}/file")
+    async def document_file(upload_id: str, request: Request) -> Response:
+        """Serve the original PDF to the owning client only."""
+        _require_origin(request)
+        service = _upload_service(request)
+        client_id = _require_client(request)
+        download: UploadDownload | None = await service.file(
+            client_id, _parse_upload_id(upload_id)
+        )
+        if download is None:
+            raise HTTPException(status_code=404, detail="unknown document")
+        safe = download.filename.replace('"', "").replace("\\", "")
+        return Response(
+            content=download.data,
+            media_type="application/pdf",
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Disposition": f'inline; filename="{safe}"',
+            },
+        )
+
     @application.post("/ask", response_model=None)
     async def ask(
         payload: AskPayload, request: Request
     ) -> dict[str, object] | JSONResponse:
-        """Serve a recorded demo answer, or call the live model on a miss."""
+        """Answer the demo corpus, or one visitor collection its owner may read."""
+        collection = (payload.collection or "").strip() or DEMO_COLLECTION
         app_cache = cast(AnswerCache, request.app.state.answer_cache)
-        cached = app_cache.get(payload.question)
-        if cached is not None:
-            body = copy.deepcopy(cached.response)
-            body["cached"] = True
-            body["cache"] = {
-                "model": cached.model,
-                "generated_at": cached.generated_at,
-            }
-            body["trace"] = copy.deepcopy(cached.trace)
-            body["citation_render_miss"] = 0
-            return body
+        if collection == DEMO_COLLECTION:
+            cached = app_cache.get(payload.question)
+            if cached is not None:
+                body = copy.deepcopy(cached.response)
+                body["cached"] = True
+                body["collection"] = DEMO_COLLECTION
+                body["cache"] = {
+                    "model": cached.model,
+                    "generated_at": cached.generated_at,
+                }
+                body["trace"] = copy.deepcopy(cached.trace)
+                body["citation_render_miss"] = 0
+                return body
 
         app_retriever = cast(Retriever | None, request.app.state.retriever)
         if app_retriever is None:
@@ -377,13 +650,31 @@ def create_app(
         app_trace_retriever = cast(
             TraceRetriever | None, request.app.state.trace_retriever
         )
+        app_collection_retriever = cast(
+            CollectionTraceRetriever | None,
+            request.app.state.collection_retriever,
+        )
+        if collection != DEMO_COLLECTION:
+            _require_origin(request)
+            service = _upload_service(request)
+            client_id = _require_client(request)
+            if await service.collection_for(client_id, collection) is None:
+                raise HTTPException(status_code=404, detail="unknown collection")
+            if app_collection_retriever is None:
+                raise HTTPException(
+                    status_code=503, detail="collection retrieval is not ready"
+                )
         try:
             response, trace = await AnswerService(
                 retriever=app_retriever,
                 model=app_model,
                 calibration=app_calibration,
                 trace_retriever=app_trace_retriever,
-            ).answer_with_trace(payload.question)
+                collection_trace_retriever=app_collection_retriever,
+            ).answer_with_trace(
+                payload.question,
+                None if collection == DEMO_COLLECTION else collection,
+            )
         except RateLimitedError as exc:
             LOGGER.warning("live endpoint rate-limited: %s", exc)
             headers = (
@@ -417,6 +708,7 @@ def create_app(
             )
         body = dataclasses.asdict(response)
         body["cached"] = False
+        body["collection"] = collection
         body["trace"] = (
             None
             if trace is None
