@@ -16,12 +16,11 @@ labels. The set is 30 rather than 100 because 100 spans could not be labelled
 honestly in one session; see `eval/README.md` for the reduction and the guard
 that enforces it.
 
-The run in "Three runs on 2026-10-23" was generated on that date on the build
-machine (Windows 11, ONNX CPU) against the real corpus:
+The runs in "Three historical runs" were generated on the build machine
+(Windows 11, ONNX CPU) against the real corpus:
 `fastembed:BAAI/bge-small-en-v1.5` embeddings and
-`fastembed:Xenova/ms-marco-MiniLM-L-6-v2` reranker. That historical run used
-the retired keyless `openai-compatible:openai-fast` endpoint
-(`https://text.pollinations.ai/openai`). The current keyed run is described in
+`fastembed:Xenova/ms-marco-MiniLM-L-6-v2` reranker. That historical comparison
+used the retired keyless endpoint. The current keyed run is described in
 "Keyed run: the schema-stage cause". Calibration: `eval/calibration.json`,
 `gold-human-v1` (fitted on all 30 gold questions — see the in-sample caveat
 below), threshold `0.6361` on the probability scale (≈ −0.353 on the raw
@@ -95,10 +94,11 @@ plus `claims_returned`, `claims_kept`, `dropped_uncited`,
 those reasons and `metrics.structured_mode_counts` counts the mode that
 produced each final payload (`tool`, `json`, `json-fallback`, `extractive`).
 
-## Three runs on 2026-10-23
+## Three historical runs
 
-All three use the same 30 questions, corpus, embedder and reranker. The endpoint
-allows about one request per 30 s, so the runs were serialised.
+All three use the same 30 questions, corpus, embedder and reranker. The
+historical keyless endpoint allowed about one request per 30 s, so the runs were
+serialised.
 
 | run | UTC window | threshold | purpose | wall clock | model requests | answer rate (24) | unanswerable refusal (6) | citation precision* | faithfulness* | gates | exit |
 |---|---|---|---:|---|---:|---:|---|---|---|---|---:|
@@ -160,7 +160,7 @@ empty denominator fails a gate; a gate never passes vacuously.
 ## Ablation table
 
 Retrieval rows use the same 24 answerable questions. The answer rows come from
-the historical run (c) of 2026-10-23; the current keyed run's answer rows are in
+the historical run (c); the current keyed run's answer rows are in
 "Keyed run: the schema-stage cause". The forced row is a labelled diagnostic and
 is not a production result.
 
@@ -271,12 +271,15 @@ different scale, so this artifact must not be used with the dummy reranker.
 
 ## Run cost and rate limiting
 
-The endpoint is public, keyless, and answers about once per 30 s per IP. The
-client holds one request in flight per endpoint, spaces request **starts** by at
-least 31 s, and retries a 429 twice (5 s, then 10 s) before raising
-`RateLimitedError`.
+The historical keyless endpoint answered about once per 30 s per IP; the three
+historical runs below were serialised at 31 s. The current keyed free tier
+answers one request at a time: the client holds one request in flight per
+endpoint, spaces request **starts** by at least `DOCQA_MODEL_MIN_INTERVAL_S`
+(20 s), and retries a 429 or 503 twice (5 s, then 10 s) before raising
+`RateLimitedError`. The current keyed production run took 710.3 s with 26
+requests and no retries or rate-limit failures.
 
-| run | requests | retries | rate-limited | minimum spacing floor | measured wall clock |
+| historical run | requests | retries | rate-limited | minimum spacing floor | measured wall clock |
 |---|---:|---:|---:|---:|---:|
 | (a) baseline | 5 | 0 | 0 | 4 × 31 = 124 s | 148.1 s |
 | (b) forced diagnostic | 30 | 0 | 0 | 29 × 31 = 899 s | 916.4 s |
@@ -284,7 +287,7 @@ least 31 s, and retries a 429 twice (5 s, then 10 s) before raising
 
 Run (c)'s wall clock is almost entirely the rate-limit floor; local ONNX and
 retrieval work adds ~4 s across 30 questions because it is dominated by the
-31 s waits. The report records the budget in `provenance.run`:
+31 s waits. The report records the budget in `run`:
 `model_calls {requests, retries, rate_limited}`, `model_min_interval_s`,
 `wall_clock_s`, and `blocked` (set after three consecutive 429s). There were 0
 retries and 0 rate-limit failures in all three runs, and `blocked` is `null` in

@@ -14,7 +14,7 @@ services:
     runtime: docker
     plan: free
     region: frankfurt
-    branch: master
+    branch: w2-b-hosting
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
@@ -55,13 +55,13 @@ services:
   - type: web
     name: marginalia-ui
     runtime: static
-    branch: master
+    branch: w2-b-hosting
     buildCommand: cd ui && npm ci && npm run build
     staticPublishPath: ui/dist
     autoDeploy: false
     envVars:
       - key: VITE_API_BASE
-        value: https://marginalia-api.onrender.com/
+        value: https://marginalia-api-4pvl.onrender.com/
     routes:
       - type: rewrite
         source: /*
