@@ -20,3 +20,4 @@ node_modules/
 ui/dist/
 ui/test-results/
 ui/node_modules/
+ui/tsconfig.tsbuildinfo
