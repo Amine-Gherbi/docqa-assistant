@@ -21,3 +21,4 @@ ui/dist/
 ui/test-results/
 ui/node_modules/
 ui/tsconfig.tsbuildinfo
+.superpowers/
