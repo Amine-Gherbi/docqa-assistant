@@ -27,6 +27,14 @@ DEFAULT_MODEL_MIN_INTERVAL_S = 20.0
 DEFAULT_MODEL_MAX_RETRIES = 2
 DEFAULT_MODEL_RETRY_BACKOFF_S = 5.0
 
+DEFAULT_UPLOAD_MAX_BYTES = 25 * 1024 * 1024
+DEFAULT_UPLOAD_MAX_PAGES = 80
+DEFAULT_UPLOAD_TTL_HOURS = 24
+DEFAULT_UPLOAD_PER_CLIENT_DAY = 3
+DEFAULT_UPLOAD_PER_HOST_HOUR = 20
+DEFAULT_UPLOAD_TIMEOUT_S = 90.0
+DEFAULT_UPLOAD_SWEEP_INTERVAL_S = 60.0
+
 StructuredOutputMode = Literal["tool", "json"]
 StructuredOutputRequest = Literal["auto", "tool", "json"]
 
@@ -70,6 +78,18 @@ class Settings:
     # Diagnostic only: bypasses the calibrated low-score refusal so the model's
     # own answer rate can be measured. Never use it for a gate run.
     force_generation: bool = False
+    # Visitor uploads. The free instance cannot parse an unbounded file, so the
+    # limits are settings and the hosted values are measured rather than assumed.
+    upload_max_bytes: int = DEFAULT_UPLOAD_MAX_BYTES
+    upload_max_pages: int = DEFAULT_UPLOAD_MAX_PAGES
+    upload_ttl_hours: int = DEFAULT_UPLOAD_TTL_HOURS
+    upload_per_client_day: int = DEFAULT_UPLOAD_PER_CLIENT_DAY
+    upload_per_host_hour: int = DEFAULT_UPLOAD_PER_HOST_HOUR
+    upload_timeout_s: float = DEFAULT_UPLOAD_TIMEOUT_S
+    upload_sweep_interval_s: float = DEFAULT_UPLOAD_SWEEP_INTERVAL_S
+    # Signs the opaque client cookie. Unset mints a per-process secret, which
+    # invalidates cookies on restart; the hosted service sets a stable value.
+    cookie_secret: str | None = None
 
     @property
     def lock_path(self) -> Path:
@@ -165,6 +185,34 @@ def _boolean_from_environment(name: str) -> bool:
     if raw in {"1", "true", "yes", "on"}:
         return True
     raise ValueError(f"{name} must be a boolean (1/0, true/false, yes/no)")
+
+
+def _int_from_environment(name: str, default: int, *, minimum: int) -> int:
+    """Read a positive integer limit; reject a value that would disable it."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}")
+    return value
+
+
+def _float_from_environment(name: str, default: float, *, minimum: float) -> float:
+    """Read a positive duration in seconds."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number of seconds") from exc
+    if value < minimum:
+        raise ValueError(f"{name} must be at least {minimum}")
+    return value
 
 
 def normalise_base_url(url: str | None) -> str | None:
@@ -336,4 +384,28 @@ def get_settings() -> Settings:
         rerank_batch_size=_rerank_batch_size_from_environment(),
         onnx_memory_arena=_boolean_from_environment("DOCQA_ONNX_MEMORY_ARENA"),
         force_generation=_boolean_from_environment("DOCQA_FORCE_GENERATION"),
+        upload_max_bytes=_int_from_environment(
+            "DOCQA_UPLOAD_MAX_BYTES", DEFAULT_UPLOAD_MAX_BYTES, minimum=1
+        ),
+        upload_max_pages=_int_from_environment(
+            "DOCQA_UPLOAD_MAX_PAGES", DEFAULT_UPLOAD_MAX_PAGES, minimum=1
+        ),
+        upload_ttl_hours=_int_from_environment(
+            "DOCQA_UPLOAD_TTL_HOURS", DEFAULT_UPLOAD_TTL_HOURS, minimum=1
+        ),
+        upload_per_client_day=_int_from_environment(
+            "DOCQA_UPLOAD_PER_CLIENT_DAY", DEFAULT_UPLOAD_PER_CLIENT_DAY, minimum=1
+        ),
+        upload_per_host_hour=_int_from_environment(
+            "DOCQA_UPLOAD_PER_HOST_HOUR", DEFAULT_UPLOAD_PER_HOST_HOUR, minimum=1
+        ),
+        upload_timeout_s=_float_from_environment(
+            "DOCQA_UPLOAD_TIMEOUT_S", DEFAULT_UPLOAD_TIMEOUT_S, minimum=1.0
+        ),
+        upload_sweep_interval_s=_float_from_environment(
+            "DOCQA_UPLOAD_SWEEP_INTERVAL_S",
+            DEFAULT_UPLOAD_SWEEP_INTERVAL_S,
+            minimum=1.0,
+        ),
+        cookie_secret=os.environ.get("DOCQA_COOKIE_SECRET", "").strip() or None,
     )
