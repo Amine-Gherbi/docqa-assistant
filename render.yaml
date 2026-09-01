@@ -3,19 +3,23 @@
 #
 # Secrets are deliberately `sync: false`: Render prompts for them and never
 # reads them from this repository.
+#
+# The free plan runs no pre-deploy command, so `alembic upgrade head` and the
+# corpus check are an operator step from a machine that holds the database URL
+# (see docs/ENV.md). `GET /ready` reports the database counts and the applied
+# migration, so a deploy whose database lacks the corpus fails readiness.
 services:
   - type: web
     name: marginalia-api
     runtime: docker
     plan: free
     region: frankfurt
-    branch: w2-b-hosting
+    branch: master
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
     autoDeploy: false
-    # Runs in the built image before traffic moves; a failure aborts the deploy.
-    preDeployCommand: alembic upgrade head && docqa ingest --check
+    # Render injects PORT; the image binds ${PORT:-8788}. Do not set it here.
     envVars:
       - key: DOCQA_DATABASE_URL
         sync: false
@@ -35,13 +39,11 @@ services:
         value: fastembed
       - key: DOCQA_STRUCTURED_OUTPUT
         value: tool
-      - key: PORT
-        value: "8788"
 
   - type: web
     name: marginalia-ui
     runtime: static
-    branch: w2-b-hosting
+    branch: master
     buildCommand: cd ui && npm ci && npm run build
     staticPublishPath: ui/dist
     autoDeploy: false

@@ -25,6 +25,23 @@ def test_neon_url_becomes_asyncpg_url_with_asyncpg_ssl(monkeypatch: pytest.Monke
     assert "channel_binding" not in normalised
 
 
+def test_neon_url_without_a_port_gets_an_explicit_5432(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A shell ``PGPORT`` must not redirect a hosted URL to a local server.
+
+    asyncpg reads ``PGPORT`` when the URL omits a port; this build machine
+    exports ``PGPORT=5433`` for its local database. The normaliser makes the
+    PostgreSQL default explicit so the URL alone decides the target.
+    """
+    monkeypatch.setenv("PGPORT", "5433")
+    normalised = normalise_database_url(
+        "postgresql://owner:secret@ep-example.eu-central-1.aws.neon.tech/docqa"
+        "?sslmode=require"
+    )
+    assert "@ep-example.eu-central-1.aws.neon.tech:5432/docqa" in normalised
+
+
 def test_asyncpg_url_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     """A local URL already in the driver's dialect keeps its shape."""
     monkeypatch.setenv(
@@ -63,7 +80,9 @@ def test_alembic_uses_the_hosted_database_url(monkeypatch: pytest.MonkeyPatch) -
         "DOCQA_DATABASE_URL", "postgresql://owner:secret@neon.example/docqa?sslmode=require"
     )
     resolved = alembic_database_url("postgresql+asyncpg://postgres@localhost:5433/docqa")
-    assert resolved.startswith("postgresql+asyncpg://owner:secret@neon.example/docqa")
+    assert resolved.startswith(
+        "postgresql+asyncpg://owner:secret@neon.example:5432/docqa"
+    )
     assert "ssl=require" in resolved
 
 
