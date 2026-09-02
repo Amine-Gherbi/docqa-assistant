@@ -2,7 +2,6 @@
   "answers": [
     {
       "generated_at": "2026-10-23T17:27:03.710981+00:00",
-      "model": "openai-compatible:openai-fast",
       "question": "How many identical layers are in the Transformer encoder stack?",
       "response": {
         "calibration": {
@@ -30,7 +29,7 @@
           }
         ],
         "insufficient_evidence": false,
-        "model": "openai-compatible:openai-fast",
+        "model": null,
         "model_reason": null,
         "passages": [],
         "reason": null,
@@ -823,7 +822,6 @@
     },
     {
       "generated_at": "2026-10-23T17:27:34.827868+00:00",
-      "model": "openai-compatible:openai-fast",
       "question": "How long does Sentence-BERT take to compute 10,000 sentence embeddings?",
       "response": {
         "calibration": {
@@ -836,7 +834,7 @@
         },
         "claims": [],
         "insufficient_evidence": true,
-        "model": "openai-compatible:openai-fast",
+        "model": null,
         "model_reason": null,
         "passages": [
           {
@@ -1646,7 +1644,6 @@
     },
     {
       "generated_at": "2026-10-23T17:28:05.883922+00:00",
-      "model": "openai-compatible:openai-fast",
       "question": "What batch size and how many BM25 negative passages per question did DPR use in training?",
       "response": {
         "calibration": {
@@ -1659,7 +1656,7 @@
         },
         "claims": [],
         "insufficient_evidence": true,
-        "model": "openai-compatible:openai-fast",
+        "model": null,
         "model_reason": null,
         "passages": [
           {
@@ -2469,7 +2466,6 @@
     },
     {
       "generated_at": "2026-10-23T17:28:36.867651+00:00",
-      "model": "openai-compatible:openai-fast",
       "question": "How does the RAG-Sequence model use retrieved documents?",
       "response": {
         "calibration": {
@@ -2482,7 +2478,7 @@
         },
         "claims": [],
         "insufficient_evidence": true,
-        "model": "openai-compatible:openai-fast",
+        "model": null,
         "model_reason": null,
         "passages": [
           {
@@ -3338,7 +3334,6 @@
     },
     {
       "generated_at": "2026-10-23T17:29:07.843587+00:00",
-      "model": "openai-compatible:openai-fast",
       "question": "How does the RAG-Token model treat the retrieved documents?",
       "response": {
         "calibration": {
@@ -3366,7 +3361,7 @@
           }
         ],
         "insufficient_evidence": false,
-        "model": "openai-compatible:openai-fast",
+        "model": null,
         "model_reason": null,
         "passages": [],
         "reason": null,
@@ -4169,7 +4164,6 @@
     },
     {
       "generated_at": "2026-10-23T17:29:10.354246+00:00",
-      "model": "openai-compatible:openai-fast",
       "question": "How many layers does it use?",
       "response": {
         "calibration": {
@@ -4182,7 +4176,7 @@
         },
         "claims": [],
         "insufficient_evidence": true,
-        "model": "openai-compatible:openai-fast",
+        "model": null,
         "model_reason": null,
         "passages": [
           {
@@ -5195,7 +5189,6 @@
     }
   ],
   "generated_at": "2026-10-23T17:29:10.568939+00:00",
-  "model": "openai-compatible:openai-fast",
   "questions": 6,
   "version": 1
 }

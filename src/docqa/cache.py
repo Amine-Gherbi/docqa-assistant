@@ -40,10 +40,15 @@ class DemoQuestion:
 
 @dataclass(frozen=True)
 class CachedAnswer:
-    """A validated answer recorded with the model that produced it."""
+    """A validated answer recorded with the model that produced it.
+
+    ``model`` is optional because an older cache may predate the current model
+    endpoint and not record one; a missing model is reported as ``null`` rather
+    than guessed.
+    """
 
     question: str
-    model: str
+    model: str | None
     generated_at: str
     structured_output: str
     response: dict[str, object]
@@ -131,7 +136,7 @@ def _parse_entry(item: object) -> CachedAnswer | None:
     if (
         not isinstance(question, str)
         or not question.strip()
-        or not isinstance(model, str)
+        or (model is not None and not isinstance(model, str))
         or not isinstance(generated_at, str)
         or not isinstance(structured_output, str)
         or not isinstance(response, dict)

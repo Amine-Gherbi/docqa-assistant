@@ -22,6 +22,9 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
+    // Lighthouse's valid-source-maps audit needs real maps for the shipped
+    // chunks; the build output is already public, so this reveals nothing new.
+    sourcemap: true,
   },
   test: {
     environment: 'jsdom',

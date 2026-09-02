@@ -16,11 +16,13 @@ from typing import Literal
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from docqa.answer import (
     AnswerResponse,
     Calibration,
+    ModelCallError,
     ModelReply,
     ModelRequest,
     OpenAICompatibleModel,
@@ -544,3 +546,182 @@ def test_demo_question_loader_requires_six(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="exactly 6"):
         load_demo_questions(path)
+
+
+# -- R6 audit hardening -----------------------------------------------------
+
+
+async def _no_chunks(question: str) -> list[RetrievedChunk]:
+    return []
+
+
+def _hardened_app() -> FastAPI:
+    return create_app(
+        calibration=_calibration(),
+        model=NeverCalledModel(),
+        retriever=_no_chunks,
+        answer_cache=AnswerCache.empty(Path("missing-demo-answers.json")),
+    )
+
+
+SECURITY_EXPECTATIONS = {
+    "strict-transport-security": "max-age=31536000; includeSubDomains",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "referrer-policy": "no-referrer",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+}
+
+
+def test_security_headers_are_on_health_ask_and_404() -> None:
+    """Every response, including errors, carries the fixed header set."""
+    app = _hardened_app()
+    with TestClient(app) as client:
+        responses = [
+            client.get("/health"),
+            client.post("/ask", json={"question": "anything"}),
+            client.get("/not-a-route"),
+        ]
+
+    for response in responses:
+        for name, expected in SECURITY_EXPECTATIONS.items():
+            assert response.headers[name] == expected
+        assert "camera=()" in response.headers["permissions-policy"]
+
+
+def test_cors_still_admits_only_the_configured_ui_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DOCQA_CORS_ORIGINS", "https://marginalia-ui.onrender.com")
+    app = _hardened_app()
+    with TestClient(app) as client:
+        allowed = client.options(
+            "/ask",
+            headers={
+                "Origin": "https://marginalia-ui.onrender.com",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        refused = client.options(
+            "/ask",
+            headers={
+                "Origin": "https://evil.example",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+
+    assert allowed.status_code == 200
+    assert (
+        allowed.headers["access-control-allow-origin"]
+        == "https://marginalia-ui.onrender.com"
+    )
+    assert refused.status_code == 400
+    assert "access-control-allow-origin" not in refused.headers
+
+
+def test_invalid_body_reports_the_path_without_echoing_the_submitted_bytes() -> None:
+    """A 422 names the field and reason; it never reflects the request body."""
+    marker = "S" * 100_000
+    app = _hardened_app()
+    with TestClient(app) as client:
+        too_long = client.post("/ask", json={"question": marker})
+        malformed = client.post(
+            "/ask",
+            content='{"question": "' + marker,
+            headers={"content-type": "application/json"},
+        )
+
+    assert too_long.status_code == 422
+    assert marker not in too_long.text
+    body = too_long.json()
+    assert body["state"] == "invalid_request"
+    assert "body.question" in [error["path"] for error in body["detail"]]
+    assert all("input" not in error for error in body["detail"])
+
+    assert malformed.status_code == 422
+    assert marker not in malformed.text
+    assert "input" not in malformed.text
+
+
+def test_health_does_not_disclose_the_cache_path(tmp_path: Path) -> None:
+    cache_path = tmp_path / "private" / "demo-answers.json"
+    app = create_app(
+        calibration=_calibration(),
+        model=NeverCalledModel(),
+        retriever=_no_chunks,
+        answer_cache=AnswerCache.empty(cache_path),
+    )
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    body = response.json()
+    assert "path" not in body["demo_cache"]
+    assert str(tmp_path) not in response.text
+    assert "private" not in response.text
+
+
+def test_head_is_get_without_a_body_and_keeps_allow_on_post_only_routes() -> None:
+    app = _hardened_app()
+    with TestClient(app) as client:
+        get_health = client.get("/health")
+        head_health = client.head("/health")
+        head_ask = client.head("/ask")
+        head_missing = client.head("/not-a-route")
+
+    assert head_health.status_code == get_health.status_code == 200
+    assert head_health.content == b""
+    assert head_health.headers["content-length"] == get_health.headers["content-length"]
+    assert head_health.headers["content-type"] == get_health.headers["content-type"]
+
+    assert head_ask.status_code == 405
+    assert "POST" in head_ask.headers["allow"]
+    assert head_ask.content == b""
+
+    assert head_missing.status_code == 404
+    assert head_missing.content == b""
+
+
+def test_interactive_docs_and_openapi_are_not_published() -> None:
+    app = _hardened_app()
+    with TestClient(app) as client:
+        assert client.get("/docs").status_code == 404
+        assert client.get("/openapi.json").status_code == 404
+
+
+class FailingModel:
+    """A model whose upstream error text must not reach the caller."""
+
+    name = "fake:failing"
+    structured_output: Literal["tool", "json", "extractive"] = "tool"
+
+    async def complete(self, request: ModelRequest) -> ModelReply:
+        raise ModelCallError(
+            "upstream failed at https://internal.example/token=abc"
+        )
+
+
+def test_model_failure_returns_a_stable_code_and_logs_the_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logged: list[str] = []
+
+    def capture(message: str, *args: object) -> None:
+        logged.append(message % args)
+
+    monkeypatch.setattr("docqa.api.LOGGER.error", capture)
+    app = create_app(
+        calibration=_calibration(threshold=0.0),
+        model=FailingModel(),
+        retriever=_retriever,
+        answer_cache=AnswerCache.empty(Path("missing-demo-answers.json")),
+    )
+    with TestClient(app) as client:
+        response = client.post("/ask", json={"question": "anything"})
+
+    assert response.status_code == 502
+    body = response.json()
+    assert body["state"] == "model_unavailable"
+    assert body["code"] == "model_unavailable"
+    assert "internal.example" not in response.text
+    assert "token=abc" not in response.text
+    assert any("internal.example" in line for line in logged)

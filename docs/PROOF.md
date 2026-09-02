@@ -67,6 +67,19 @@ forced-generation diagnostic is **not** a gate run: it bypasses only the
 calibrated low-score refusal, keeps the citation validator, records
 `gate_run: false`, and exits 0 by design.
 
+## Recorded demo answers predate the keyed run
+
+`data/demo-answers.json` was recorded on 2026-10-23 (17:27–17:29 UTC), before
+the keyed Gemini migration and the calibration refit. It is therefore **not** a
+product of the current model and does not claim one: the file carries no
+model id, and each cached response has `model: null`. Each entry embeds the
+calibration snapshot that was current at recording time (threshold `0.2552`);
+that is historical metadata, not the threshold now loaded at boot. The API
+serves an exact-question hit with `cached: true` and
+`cache: {model: null, generated_at}`; a cache miss calls the current keyed
+endpoint. Regenerating these six answers against the current model is a
+separate, keyed operation and was not done in this change.
+
 ## Hosted pair
 
 | item | value |

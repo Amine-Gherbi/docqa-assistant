@@ -26,11 +26,14 @@ from typing import Annotated, Literal, cast
 
 import anyio
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from docqa.answer import (
     AnswerResponse,
@@ -74,6 +77,102 @@ from docqa.uploads.session import CLIENT_COOKIE, COOKIE_MAX_AGE_S, SessionSigner
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_K = 8
+
+# Fixed for every response, including CORS preflights, 404s, and validation
+# errors. The CSP is the JSON-API baseline: nothing may be loaded or framed.
+SECURITY_HEADERS: tuple[tuple[str, str], ...] = (
+    ("Strict-Transport-Security", "max-age=31536000; includeSubDomains"),
+    ("X-Content-Type-Options", "nosniff"),
+    ("X-Frame-Options", "DENY"),
+    ("Referrer-Policy", "no-referrer"),
+    (
+        "Permissions-Policy",
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
+        "magnetometer=(), microphone=(), payment=(), usb=()",
+    ),
+    ("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'"),
+)
+
+
+class SecurityHeadersMiddleware:
+    """Attach the fixed security headers to every HTTP response."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        """Wrap the downstream ASGI application."""
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Add the headers at ``http.response.start`` and pass everything else through."""
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for name, value in SECURITY_HEADERS:
+                    headers[name] = value
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)
+
+
+class HeadAsGetMiddleware:
+    """Answer ``HEAD`` like ``GET`` with an empty body.
+
+    Rewriting the method lets the router decide whether the route supports
+    ``GET``: a route that only supports another method still answers ``405``
+    with its ``Allow`` header. The downstream body is consumed but never
+    forwarded, and ``Content-Length`` keeps the value ``GET`` would report.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        """Wrap the downstream ASGI application."""
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Dispatch a HEAD request as GET and suppress the body."""
+        if scope["type"] != "http" or scope["method"] != "HEAD":
+            await self.app(scope, receive, send)
+            return
+        rewritten = dict(scope)
+        rewritten["method"] = "GET"
+
+        async def send_without_body(message: Message) -> None:
+            if message["type"] == "http.response.body":
+                if not message.get("more_body", False):
+                    await send(
+                        {
+                            "type": "http.response.body",
+                            "body": b"",
+                            "more_body": False,
+                        }
+                    )
+                return
+            await send(message)
+
+        await self.app(rewritten, receive, send_without_body)
+
+
+def validation_error_payload(exc: RequestValidationError) -> dict[str, object]:
+    """Return field paths and reasons without echoing the submitted bytes.
+
+    FastAPI's default 422 body includes each error's ``input`` (and sometimes
+    ``ctx``), which reflects the whole request value back to the caller. The
+    response here keeps only the location, the error type, and Pydantic's
+    value-free message.
+    """
+    errors: list[dict[str, object]] = []
+    for error in exc.errors():
+        location = [str(part) for part in error.get("loc", ())]
+        errors.append(
+            {
+                "path": ".".join(location),
+                "type": str(error.get("type", "value_error")),
+                "reason": str(error.get("msg", "invalid value")),
+            }
+        )
+    return {"state": "invalid_request", "detail": errors}
 
 Retriever = Callable[[str], Awaitable[list[RetrievedChunk]]]
 TraceRetriever = Callable[[str], Awaitable[RetrievalResult]]
@@ -456,6 +555,11 @@ def create_app(
         version="0.1.0",
         description="Cited answers over a pinned PDF corpus.",
         lifespan=lifespan,
+        # The public API surface is the documented routes only; the interactive
+        # schema pages are not part of it and are not advertised.
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
     )
     application.state.settings = resolved
     application.state.calibration = chosen_calibration
@@ -477,10 +581,19 @@ def create_app(
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved.cors_origins),
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "HEAD"],
         allow_headers=["*"],
         allow_credentials=True,
     )
+    application.add_middleware(SecurityHeadersMiddleware)
+    application.add_middleware(HeadAsGetMiddleware)
+
+    @application.exception_handler(RequestValidationError)
+    async def invalid_request(
+        _request: Request, exc: RequestValidationError
+    ) -> JSONResponse:
+        """Answer 422 with field paths and reasons, never the submitted bytes."""
+        return JSONResponse(status_code=422, content=validation_error_payload(exc))
 
     @application.get("/health")
     async def health(request: Request) -> dict[str, object]:
@@ -497,7 +610,6 @@ def create_app(
             "uncalibrated": app_calibration.uncalibrated,
             "calibration": dataclasses.asdict(app_calibration.info()),
             "demo_cache": {
-                "path": str(app_cache.path),
                 "entries": len(app_cache),
                 "model": app_cache.model,
                 "generated_at": app_cache.generated_at,
@@ -702,8 +814,9 @@ def create_app(
                 status_code=502,
                 content={
                     "state": "model_unavailable",
+                    "code": "model_unavailable",
                     "cached": False,
-                    "detail": f"model endpoint failed: {exc}",
+                    "detail": "The model endpoint did not return a usable answer.",
                 },
             )
         body = dataclasses.asdict(response)
