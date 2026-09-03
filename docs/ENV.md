@@ -30,7 +30,7 @@ the hosted pair on Render and Neon. The hosted services read the variables in
 | API | <https://marginalia-api-4pvl.onrender.com> (`/health`, `/ready`, `/ask`) |
 | UI | <https://marginalia-ui.onrender.com> |
 | Render services | `marginalia-api` (`srv-dbho7udg1s2s73aj3kd0`), `marginalia-ui` (`srv-dbho81dg1s2s73aj3rlg`); deployed from `w2-c-pdf-upload` by `commitId` through the Render API (`autoDeploy: no`) |
-| Plan | free: one 512 MB, 0.1-CPU API container; static UI; scale-to-zero after 15 minutes idle |
+| Plan | free: one 512 MB, 0.1-CPU API container; static UI; kept warm by a five-minute HTTP monitor |
 | Database | Neon PostgreSQL 16 + pgvector, database `docqa`, 5 documents / 260 chunks |
 
 The free plan runs no pre-deploy command: `preDeployCommand` is ignored and the
@@ -82,8 +82,9 @@ buffers for a process that answers one question at a time.
 
 - 512 MB RAM and 0.1 CPU for the API. The ONNX models stay resident; the
   process-wide limiter is set to 1, so inference runs one call at a time.
-- Scale-to-zero after 15 minutes idle; the first request after that waits about
-  a minute. `GET /health` and `/ready` are the warm-up probes.
+- The instance scales to zero when idle; `GET /health` and `/ready` are the
+  warm-up probes, and a five-minute monitor keeps the API serving without a
+  wake.
 - No pre-deploy command and no persistent disk. The ONNX weights are baked into
   the image at build time; the corpus PDFs are fetched and hash-checked at
   build time, while the database is external (Neon).

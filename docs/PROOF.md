@@ -89,7 +89,7 @@ separate, keyed operation and was not done in this change.
 | Render API service | `marginalia-api` (`srv-dbho7udg1s2s73aj3kd0`), live deploy `dep-dbhq71vf3r2c73di2prg` at `b35b3bb` |
 | Render UI service | `marginalia-ui` (`srv-dbho81dg1s2s73aj3rlg`), live deploy `dep-dbhprljbc2fs73f3o2pg` at `cfc2f22` |
 | Deployed commit | `w2-c-pdf-upload`; both deploys were triggered through the Render API with `commitId` and `autoDeploy: no` |
-| Plan | Render free: one 512 MB, 0.1-CPU API container, static UI, scale-to-zero after 15 minutes idle |
+| Plan | Render free: one 512 MB, 0.1-CPU API container, static UI, kept warm by a five-minute HTTP monitor |
 | Database | Neon PostgreSQL 16 + pgvector, database `docqa` |
 | Corpus | 5 documents / 260 chunks; migration `0003_collection_sha` |
 
