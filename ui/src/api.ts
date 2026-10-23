@@ -1,4 +1,3 @@
-import demoAnswer from './fixtures/demo-answer.json';
 import type { AskResponse } from './types';
 
 export const API_BASE = (import.meta.env.VITE_API_BASE ?? '/api').replace(/\/$/, '');
@@ -49,20 +48,6 @@ export async function askQuestion(question: string): Promise<AskResponse> {
     throw new ApiError(await readError(response), response.status);
   }
   return (await response.json()) as AskResponse;
-}
-
-export interface DemoAnswer extends AskResponse {
-  question: string;
-  demo_note: string;
-}
-
-export const DEMO_ANSWER = demoAnswer as unknown as DemoAnswer;
-
-/** True when the committed offline demo answers this question. */
-export function demoMatches(question: string): boolean {
-  return (
-    question.trim().toLowerCase() === DEMO_ANSWER.question.trim().toLowerCase()
-  );
 }
 
 /** GET /eval/report; null means the R5 run has not produced a report yet. */

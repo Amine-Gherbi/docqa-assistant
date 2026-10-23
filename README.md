@@ -1,4 +1,4 @@
-# docqa-assistant
+# Marginalia
 
 [![eval](https://img.shields.io/badge/eval-3%20of%205%20gates%20fail-red)](docs/EVAL.md)
 

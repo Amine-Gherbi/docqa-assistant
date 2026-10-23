@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { DEMO_ANSWER } from './api';
-import { CITATION_FIXTURE, FIXTURE_CITATIONS } from './fixtures';
+import {
+  CITATION_FIXTURE,
+  FIXTURE_CITATIONS,
+  FIXTURE_DEMO_ANSWER,
+} from './fixtures';
 import { normaliseWithMap } from './normalise';
 import { findQuote } from './resolve';
 
@@ -28,7 +31,7 @@ describe('committed citation fixtures', () => {
 
   it('resolves every claim in the offline demo against the same pages', () => {
     const misses: string[] = [];
-    for (const claim of DEMO_ANSWER.claims) {
+    for (const claim of FIXTURE_DEMO_ANSWER.claims) {
       for (const citation of claim.citations) {
         const page = pages.get(citation.page_no);
         if (page === undefined || findQuote(page, citation.quote) === null) {

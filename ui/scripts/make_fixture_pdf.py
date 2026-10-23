@@ -93,14 +93,14 @@ def build_pdf() -> None:
             y += 30
         page.insert_text(
             (72, 740),
-            f"Committed fixture for the docqa assistant citation UI. Page {page.number + 1} of 4.",
+            f"Committed fixture for the Marginalia citation UI. Page {page.number + 1} of 4.",
             fontsize=8,
             fontname="docqa-regular",
         )
     document.set_metadata(
         {
-            "title": "docqa-assistant citation fixture",
-            "author": "docqa-assistant",
+            "title": "Marginalia citation fixture",
+            "author": "Marginalia",
             "subject": "Committed offline fixture for citation resolution",
             "producer": "PyMuPDF 2.0",
         }
