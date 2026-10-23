@@ -1,0 +1,17 @@
+# The corpus is materialised from corpus.lock.json, never committed.
+data/corpus/
+data/abs-*.html
+data/_*.pdf
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / editor
+node_modules/
+.DS_Store

@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "corpus": "docqa-p4-r1",
+  "generated_at": "2026-10-23",
+  "note": "PDFs are not committed. Run `scripts/fetch-corpus` to materialise data/corpus and verify these hashes.",
+  "files": [
+    {
+      "doc_id": "attention-is-all-you-need",
+      "filename": "1706.03762v7.pdf",
+      "title": "Attention Is All You Need",
+      "source": "arXiv:1706.03762v7",
+      "url": "https://arxiv.org/pdf/1706.03762v7",
+      "sha256": "bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697",
+      "bytes": 2215244,
+      "pages": 15,
+      "licence": "arXiv.org perpetual, non-exclusive distribution licence 1.0",
+      "licence_url": "https://arxiv.org/licenses/nonexclusive-distrib/1.0/",
+      "retrieved_at": "2026-10-23"
+    },
+    {
+      "doc_id": "bert",
+      "filename": "1810.04805v2.pdf",
+      "title": "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+      "source": "arXiv:1810.04805v2",
+      "url": "https://arxiv.org/pdf/1810.04805v2",
+      "sha256": "5692a5514787a8c6727b4ff3b726a3385798bc68e12138d1d4af83947e2acf6e",
+      "bytes": 775166,
+      "pages": 16,
+      "licence": "arXiv.org perpetual, non-exclusive distribution licence 1.0",
+      "licence_url": "https://arxiv.org/licenses/nonexclusive-distrib/1.0/",
+      "retrieved_at": "2026-10-23"
+    },
+    {
+      "doc_id": "sentence-bert",
+      "filename": "1908.10084v1.pdf",
+      "title": "Sentence-BERT: Sentence Embeddings using Siamese BERT-Networks",
+      "source": "arXiv:1908.10084v1",
+      "url": "https://arxiv.org/pdf/1908.10084v1",
+      "sha256": "92366d22fc0521350d6cbe0ad72bcee754f90e88181d7b4a8e2adb1e7e594fec",
+      "bytes": 548961,
+      "pages": 11,
+      "licence": "Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)",
+      "licence_url": "https://creativecommons.org/licenses/by-sa/4.0/",
+      "retrieved_at": "2026-10-23"
+    },
+    {
+      "doc_id": "dense-passage-retrieval",
+      "filename": "2004.04906v3.pdf",
+      "title": "Dense Passage Retrieval for Open-Domain Question Answering",
+      "source": "arXiv:2004.04906v3",
+      "url": "https://arxiv.org/pdf/2004.04906v3",
+      "sha256": "3e67fc1a9977715acf722d85f0b7d124b03715e975f6310a4d6c12094190912f",
+      "bytes": 383508,
+      "pages": 13,
+      "licence": "arXiv.org perpetual, non-exclusive distribution licence 1.0",
+      "licence_url": "https://arxiv.org/licenses/nonexclusive-distrib/1.0/",
+      "retrieved_at": "2026-10-23"
+    },
+    {
+      "doc_id": "retrieval-augmented-generation",
+      "filename": "2005.11401v4.pdf",
+      "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+      "source": "arXiv:2005.11401v4",
+      "url": "https://arxiv.org/pdf/2005.11401v4",
+      "sha256": "23e3249e9a1e75418d82efecab0ea8c4d033b89c93742f63208d47ce01f21233",
+      "bytes": 885323,
+      "pages": 19,
+      "licence": "arXiv.org perpetual, non-exclusive distribution licence 1.0",
+      "licence_url": "https://arxiv.org/licenses/nonexclusive-distrib/1.0/",
+      "retrieved_at": "2026-10-23"
+    }
+  ]
+}
