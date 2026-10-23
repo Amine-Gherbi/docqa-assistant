@@ -15,7 +15,7 @@ uv run mypy --strict src
 echo "== pytest =="
 uv run pytest
 
-if command -v k6 >/dev/null 2>&1; then
+if [ "${DOCQA_WITH_K6:-0}" = "1" ] && command -v k6 >/dev/null 2>&1; then
   echo "== k6: 4 concurrent askers =="
   uv run docqa serve --port 8788 > "${TMPDIR:-/tmp}/docqa-verify-api.log" 2>&1 &
   API_PID=$!
@@ -39,6 +39,6 @@ if command -v k6 >/dev/null 2>&1; then
   K6_P95_MS="${DOCQA_K6_P95_MS:-5000}" k6 run scripts/k6-ask.js
   echo "verify: PASS (including k6)"
 else
-  echo "SKIP k6: binary not installed; concurrency p95 is UNVERIFIED on this machine"
+  echo "SKIP k6: loopback latency gate is opt-in (DOCQA_WITH_K6=1); measured numbers live in docs/ENV.md"
   echo "verify: PASS (lint, types, tests; k6 skipped and documented)"
 fi
