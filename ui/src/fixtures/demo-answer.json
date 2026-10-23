@@ -1,0 +1,66 @@
+{
+  "question": "How does hybrid retrieval find a rare term that vector-only misses?",
+  "demo_note": "Offline demo fixture used only when the API is unreachable. The retrieval numbers are illustrative, not a live request.",
+  "claims": [
+    {
+      "text": "Hybrid retrieval surfaces the rare term “quokka” where vector-only retrieval misses it.",
+      "citations": [
+        {"chunk_id": 112, "doc_id": "fixture-corpus", "page_no": 3, "char_start": 0, "char_end": 0, "page_text_sha256": "fixture", "quote": "Hybrid retrieval finds the rare term “quokka” but vector only misses it."}
+      ]
+    },
+    {
+      "text": "The lexical ranker uses ts_rank_cd rather than BM25.",
+      "citations": [
+        {"chunk_id": 113, "doc_id": "fixture-corpus", "page_no": 3, "char_start": 0, "char_end": 0, "page_text_sha256": "fixture", "quote": "The lexical ranker uses ts_rank_cd rather than BM25."}
+      ]
+    },
+    {
+      "text": "Reciprocal rank fusion merges the two ranked lists without score scaling.",
+      "citations": [
+        {"chunk_id": 104, "doc_id": "fixture-corpus", "page_no": 1, "char_start": 0, "char_end": 0, "page_text_sha256": "fixture", "quote": "Reciprocal rank fusion merges two lists without score scaling."}
+      ]
+    }
+  ],
+  "insufficient_evidence": false,
+  "reason": null,
+  "passages": [],
+  "model": "extractive fallback (no model key)",
+  "structured_output": "extractive",
+  "validation": {"claims_returned": 3, "claims_kept": 3, "dropped_uncited": 0, "dropped_unknown_citation": 0, "dropped_quote_mismatch": 0, "dropped_bad_quote": 0, "schema_failures": 0, "repair_turns": 0, "claims_dropped": 0},
+  "refusal_probability": 0.407,
+  "calibration": {"fit_set_sha256": "52278766f27bd7bc78726da5b4a1afb6e2858e8a159abb9f0fca63dfe0275a21", "a": 0.5735792838988321, "b": -4.849528428838639, "threshold": 0.2552458157056597, "uncalibrated": false, "provenance": "offline demo fixture"},
+  "uncalibrated": false,
+  "model_reason": null,
+  "citation_render_miss": 0,
+  "trace": {
+    "mode": "hybrid_rerank",
+    "embedder": "demo:fixture",
+    "reranker": "demo:fixture cross-encoder",
+    "vector_hits": [
+      {"chunk_id": 112, "doc_id": "fixture-corpus", "page_no": 3, "breadcrumb": "3 Citations", "preview": "Hybrid retrieval finds the rare term “quokka” but vector only misses it.", "rank": 1, "cosine_distance": 0.182},
+      {"chunk_id": 205, "doc_id": "fixture-corpus", "page_no": 2, "breadcrumb": "2 Calibration", "preview": "A calibrated probability below the threshold triggers a refusal.", "rank": 2, "cosine_distance": 0.241},
+      {"chunk_id": 113, "doc_id": "fixture-corpus", "page_no": 3, "breadcrumb": "3 Citations", "preview": "The lexical ranker uses ts_rank_cd rather than BM25.", "rank": 3, "cosine_distance": 0.263},
+      {"chunk_id": 104, "doc_id": "fixture-corpus", "page_no": 1, "breadcrumb": "1 Retrieval", "preview": "Reciprocal rank fusion merges two lists without score scaling.", "rank": 4, "cosine_distance": 0.311}
+    ],
+    "lexical_hits": [
+      {"chunk_id": 113, "doc_id": "fixture-corpus", "page_no": 3, "breadcrumb": "3 Citations", "preview": "The lexical ranker uses ts_rank_cd rather than BM25.", "rank": 1, "ts_rank_cd": 0.607},
+      {"chunk_id": 112, "doc_id": "fixture-corpus", "page_no": 3, "breadcrumb": "3 Citations", "preview": "Hybrid retrieval finds the rare term “quokka” but vector only misses it.", "rank": 2, "ts_rank_cd": 0.412},
+      {"chunk_id": 104, "doc_id": "fixture-corpus", "page_no": 1, "breadcrumb": "1 Retrieval", "preview": "Reciprocal rank fusion merges two lists without score scaling.", "rank": 3, "ts_rank_cd": 0.288}
+    ],
+    "fusion_hits": [
+      {"chunk_id": 112, "doc_id": "fixture-corpus", "page_no": 3, "breadcrumb": "3 Citations", "preview": "Hybrid retrieval finds the rare term “quokka” but vector only misses it.", "rrf_rank": 1, "rrf_score": 0.03252, "vector_rank": 1, "lexical_rank": 2, "rerank_rank": 1, "rank_delta": 0},
+      {"chunk_id": 113, "doc_id": "fixture-corpus", "page_no": 3, "breadcrumb": "3 Citations", "preview": "The lexical ranker uses ts_rank_cd rather than BM25.", "rrf_rank": 2, "rrf_score": 0.03186, "vector_rank": 3, "lexical_rank": 1, "rerank_rank": 2, "rank_delta": 0},
+      {"chunk_id": 104, "doc_id": "fixture-corpus", "page_no": 1, "breadcrumb": "1 Retrieval", "preview": "Reciprocal rank fusion merges two lists without score scaling.", "rrf_rank": 3, "rrf_score": 0.0315, "vector_rank": 4, "lexical_rank": 3, "rerank_rank": 3, "rank_delta": 0},
+      {"chunk_id": 205, "doc_id": "fixture-corpus", "page_no": 2, "breadcrumb": "2 Calibration", "preview": "A calibrated probability below the threshold triggers a refusal.", "rrf_rank": 4, "rrf_score": 0.01613, "vector_rank": 2, "lexical_rank": null, "rerank_rank": 4, "rank_delta": 0}
+    ],
+    "rerank_hits": [
+      {"chunk_id": 112, "doc_id": "fixture-corpus", "page_no": 3, "breadcrumb": "3 Citations", "preview": "Hybrid retrieval finds the rare term “quokka” but vector only misses it.", "rerank_rank": 1, "rrf_rank": 1, "rrf_score": 0.03252, "vector_rank": 1, "lexical_rank": 2, "rerank_score": 7.8, "kept": true, "calibrated_probability": 0.407},
+      {"chunk_id": 113, "doc_id": "fixture-corpus", "page_no": 3, "breadcrumb": "3 Citations", "preview": "The lexical ranker uses ts_rank_cd rather than BM25.", "rerank_rank": 2, "rrf_rank": 2, "rrf_score": 0.03186, "vector_rank": 3, "lexical_rank": 1, "rerank_score": 6.2, "kept": true, "calibrated_probability": 0.215},
+      {"chunk_id": 104, "doc_id": "fixture-corpus", "page_no": 1, "breadcrumb": "1 Retrieval", "preview": "Reciprocal rank fusion merges two lists without score scaling.", "rerank_rank": 3, "rrf_rank": 3, "rrf_score": 0.0315, "vector_rank": 4, "lexical_rank": 3, "rerank_score": 5.1, "kept": true, "calibrated_probability": 0.127},
+      {"chunk_id": 205, "doc_id": "fixture-corpus", "page_no": 2, "breadcrumb": "2 Calibration", "preview": "A calibrated probability below the threshold triggers a refusal.", "rerank_rank": 4, "rrf_rank": 4, "rrf_score": 0.01613, "vector_rank": 2, "lexical_rank": null, "rerank_score": 4.0, "kept": true, "calibrated_probability": 0.072}
+    ],
+    "context_chunk_ids": [112, 113, 104, 205],
+    "context_tokens": 1180,
+    "refusal": {"top_rerank_score": 7.8, "top_probability": 0.407, "threshold": 0.2552458157056597, "decision": "answered", "reason": null, "uncalibrated": false}
+  }
+}

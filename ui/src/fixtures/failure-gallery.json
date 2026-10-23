@@ -1,0 +1,59 @@
+{
+  "cases": [
+    {
+      "id": "correct-refusal",
+      "kind": "Correct refusal with competing passages",
+      "title": "A plausible near miss is refused, and the two passages show why",
+      "question": "What learning rate schedule did the Transformer use?",
+      "verdict": "insufficient_evidence · low_score",
+      "explanation": "Both passages discuss optimisation, so retrieval was not empty. The calibrated top probability (0.161) is below the fitted threshold (0.255), so the server refused before generation. The competing passages are shown so the refusal can be inspected rather than trusted.",
+      "numbers": [
+        {"label": "top rerank score", "value": "4.62"},
+        {"label": "top calibrated probability", "value": "0.161"},
+        {"label": "refusal threshold", "value": "0.255"},
+        {"label": "decision", "value": "refused (low_score)"}
+      ],
+      "passages": [
+        {"chunk_id": 41, "doc_id": "attention-is-all-you-need", "page_no": 5, "breadcrumb": "5 Training > 5.3 Optimizer", "text": "We used the Adam optimizer with beta1 = 0.9, beta2 = 0.98 and epsilon = 1e-9.", "score": 4.62},
+        {"chunk_id": 42, "doc_id": "attention-is-all-you-need", "page_no": 5, "breadcrumb": "5 Training > 5.3 Optimizer", "text": "The learning rate was varied over the course of training according to a fixed formula.", "score": 4.31}
+      ]
+    },
+    {
+      "id": "integrity-rejection",
+      "kind": "Citation rejected by integrity checks",
+      "title": "A fluent claim is dropped because its quote is not in the cited chunk",
+      "question": "How many papers are in the corpus?",
+      "verdict": "claim dropped · quote_mismatch",
+      "explanation": "The model returned a claim with a real citation id, but the quote it supplied does not appear in that chunk. The server drops the claim before the caller sees it and records dropped_quote_mismatch. The proposed quote and the actual chunk are shown side by side.",
+      "numbers": [
+        {"label": "claims returned", "value": "1"},
+        {"label": "claims kept", "value": "0"},
+        {"label": "dropped_quote_mismatch", "value": "1"},
+        {"label": "final outcome", "value": "validation_failed"}
+      ],
+      "passages": [
+        {"chunk_id": 17, "doc_id": "corpus-notes", "page_no": 1, "breadcrumb": "Corpus > Composition", "text": "The corpus contains five arXiv papers and two GAO reports.", "score": 6.1},
+        {"chunk_id": 17, "doc_id": "corpus-notes", "page_no": 1, "breadcrumb": "Corpus > Composition", "text": "PROPOSED QUOTE (rejected): “The corpus contains twelve arXiv papers.”", "score": null}
+      ]
+    },
+    {
+      "id": "vector-only-versus-hybrid",
+      "kind": "Vector-only wrong, hybrid right",
+      "title": "The rare term is invisible to the vector path and found by ts_rank_cd",
+      "question": "Which fixture term is found only by the lexical path?",
+      "verdict": "hybrid recall 1.0 · vector-only recall 0.0",
+      "explanation": "Vector-only ranks four semantically adjacent passages above the gold chunk and never retrieves it. Adding the lexical path puts the gold chunk at lexical rank 1; RRF fuses it to rank 1, so the final context contains the evidence.",
+      "numbers": [
+        {"label": "gold chunk", "value": "112"},
+        {"label": "vector-only rank of gold", "value": "not retrieved"},
+        {"label": "lexical rank of gold", "value": "1"},
+        {"label": "hybrid RRF rank of gold", "value": "1"}
+      ],
+      "passages": [
+        {"chunk_id": 101, "doc_id": "fixture-corpus", "page_no": 1, "breadcrumb": "1 Retrieval", "text": "Dense retrieval maps each passage to a single vector. (vector-only rank 1 — wrong)", "score": 0.81},
+        {"chunk_id": 102, "doc_id": "fixture-corpus", "page_no": 2, "breadcrumb": "2 Calibration", "text": "The refusal threshold is fitted on held out query passage pairs. (vector-only rank 2 — wrong)", "score": 0.74},
+        {"chunk_id": 112, "doc_id": "fixture-corpus", "page_no": 3, "breadcrumb": "3 Citations", "text": "Hybrid retrieval finds the rare term “quokka” but vector only misses it. (lexical rank 1, hybrid rank 1 — gold)", "score": 0.62}
+      ]
+    }
+  ]
+}
