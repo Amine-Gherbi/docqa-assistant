@@ -262,13 +262,13 @@ code {
 }
 
 .ask-head {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 /* ---------- Question form ---------- */
 
 .ask-form {
-  margin: 0 0 10px;
+  margin: 0 0 8px;
 }
 
 .ask-row {
@@ -309,7 +309,7 @@ code {
 }
 
 .examples {
-  margin: 14px 0 0;
+  margin: 12px 0 0;
 }
 
 .examples-heading {
@@ -455,13 +455,13 @@ code {
 /* ---------- Answer ---------- */
 
 .answer-result {
-  margin-top: 28px;
-  padding-top: 22px;
+  margin-top: 20px;
+  padding-top: 16px;
   border-top: 1px solid var(--line-strong);
 }
 
 .answer-heading {
-  margin: 0 0 8px;
+  margin: 0 0 4px;
 }
 
 .claims {
@@ -473,7 +473,7 @@ code {
 }
 
 .claim {
-  padding: 16px 0;
+  padding: 12px 0;
   border-top: 1px solid var(--line);
 }
 
@@ -485,7 +485,7 @@ code {
   margin: 0;
   color: var(--ink);
   font-size: 16px;
-  line-height: 1.65;
+  line-height: 1.55;
   overflow-wrap: anywhere;
 }
 
@@ -523,8 +523,8 @@ code {
 }
 
 .sources {
-  margin-top: 28px;
-  padding-top: 18px;
+  margin-top: 18px;
+  padding-top: 12px;
   border-top: 1px solid var(--line);
 }
 
@@ -556,7 +556,7 @@ code {
 .source-list {
   display: flex;
   flex-direction: column;
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -568,7 +568,7 @@ code {
   align-items: start;
   width: 100%;
   min-height: 44px;
-  padding: 10px 8px;
+  padding: 7px 8px;
   border: 0;
   border-top: 1px solid var(--line);
   background: transparent;
@@ -604,7 +604,7 @@ code {
 .source-copy {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   min-width: 0;
 }
 
@@ -623,10 +623,15 @@ code {
 }
 
 .source-quote {
+  display: -webkit-box;
+  overflow: hidden;
   font-family: var(--serif);
   font-size: 15px;
-  line-height: 1.5;
+  line-height: 1.45;
   overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .offline-footnote {
