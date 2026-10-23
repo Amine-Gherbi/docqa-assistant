@@ -16,6 +16,10 @@ loader refuses to construct a service when the file is missing unless
 ``allow_uncalibrated=True`` is passed explicitly, and that state is carried into
 every response.
 
+``force_generation=True`` is a diagnostic escape hatch: it bypasses only the
+low-score refusal so the model's own answer rate can be measured. Citation and
+schema validation still run unchanged, and every forced response says so.
+
 With no ``DOCQA_MODEL_BASE_URL`` configured, :func:`build_model` returns
 :class:`ExtractiveModel`: a deterministic, clearly labelled fallback that still
 emits verbatim quotes through the same server-side validation.
@@ -23,6 +27,7 @@ emits verbatim quotes through the same server-side validation.
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import hashlib
 import http.server
@@ -31,9 +36,11 @@ import logging
 import math
 import re
 import threading
+import time
 import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar, Literal, Protocol, cast, runtime_checkable
 
@@ -118,6 +125,28 @@ class CalibrationUnavailable(CalibrationError):
 
 class ModelCallError(RuntimeError):
     """The configured model endpoint could not be reached or returned no body."""
+
+
+class RateLimitedError(ModelCallError):
+    """The endpoint kept returning HTTP 429 after the configured retries.
+
+    The API maps this to a readable ``rate_limited`` state; the eval records it
+    per question rather than turning it into a 500 or a silent fallback.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        endpoint: str,
+        attempts: int,
+        retry_after_s: float | None = None,
+    ) -> None:
+        """Carry the endpoint, attempt count, and any server hint."""
+        super().__init__(message)
+        self.endpoint = endpoint
+        self.attempts = attempts
+        self.retry_after_s = retry_after_s
 
 
 class AnswerSchemaError(RuntimeError):
@@ -350,6 +379,7 @@ class AnswerResponse:
     calibration: CalibrationInfo
     uncalibrated: bool
     model_reason: str | None = None
+    forced_generation: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -757,8 +787,72 @@ def parse_json_lenient(raw: str) -> object | None:
     return repaired
 
 
+@dataclass
+class ModelCallStats:
+    """Wire-level call accounting copied into the eval report."""
+
+    requests: int = 0
+    retries: int = 0
+    rate_limited: int = 0
+
+    def as_dict(self) -> dict[str, int]:
+        """JSON-safe counters."""
+        return {
+            "requests": self.requests,
+            "retries": self.retries,
+            "rate_limited": self.rate_limited,
+        }
+
+
+class _EndpointGate:
+    """One lock and one start timestamp per endpoint.
+
+    The gate is process-wide so concurrent API requests to the same free tier
+    cannot overlap: one call in flight, and at least ``min_interval_s`` between
+    request starts.
+    """
+
+    __slots__ = ("last_start", "lock")
+
+    def __init__(self) -> None:
+        self.lock = asyncio.Lock()
+        self.last_start = 0.0
+
+
+_GATES: dict[str, _EndpointGate] = {}
+_GATES_LOCK = threading.Lock()
+
+
+def _endpoint_gate(base_url: str) -> _EndpointGate:
+    """Return the shared gate for ``base_url``, creating it if needed."""
+    with _GATES_LOCK:
+        gate = _GATES.get(base_url)
+        if gate is None:
+            gate = _EndpointGate()
+            _GATES[base_url] = gate
+        return gate
+
+
+def _retry_after_seconds(response: httpx.Response) -> float | None:
+    """Read a numeric ``Retry-After`` header when the server sends one."""
+    raw = response.headers.get("Retry-After")
+    if raw is None:
+        return None
+    try:
+        value = float(raw.strip())
+    except ValueError:
+        return None
+    return value if value >= 0 else None
+
+
 class OpenAICompatibleModel:
-    """Chat-completions client with a forced tool call and a JSON-only fallback."""
+    """Chat-completions client with a forced tool call and a JSON-only fallback.
+
+    Calls to one endpoint are serialised and spaced by ``min_interval_s``
+    (default 31 s for the free keyless tier). A 429 is retried ``max_retries``
+    times with exponential backoff; an exhausted call raises
+    :class:`RateLimitedError` instead of pretending the model answered.
+    """
 
     def __init__(
         self,
@@ -769,6 +863,9 @@ class OpenAICompatibleModel:
         api_key: str | None = None,
         timeout_s: float = 60.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        min_interval_s: float = 0.0,
+        max_retries: int = 2,
+        retry_backoff_s: float = 5.0,
     ) -> None:
         """Configure the endpoint; nothing is contacted until ``complete`` runs."""
         self._base_url = base_url.rstrip("/")
@@ -776,10 +873,19 @@ class OpenAICompatibleModel:
         self._api_key = api_key
         self._timeout_s = timeout_s
         self._transport = transport
+        self._min_interval_s = max(0.0, min_interval_s)
+        self._max_retries = max(0, max_retries)
+        self._retry_backoff_s = max(0.0, retry_backoff_s)
+        self.stats = ModelCallStats()
         self.name = f"openai-compatible:{model_name}"
         self.structured_output: Literal["tool", "json", "extractive"] = (
             "json" if structured_output == "json" else "tool"
         )
+
+    @property
+    def endpoint(self) -> str:
+        """The endpoint this client writes to."""
+        return self._base_url
 
     def _body(self, request: ModelRequest) -> dict[str, object]:
         body: dict[str, object] = {
@@ -819,10 +925,10 @@ class OpenAICompatibleModel:
             ]
         return body
 
-    async def _post(self, body: dict[str, object]) -> tuple[object | None, str | None]:
-        headers = {"Content-Type": "application/json"}
-        if self._api_key:
-            headers["Authorization"] = f"Bearer {self._api_key}"
+    async def _send(
+        self, body: dict[str, object], headers: dict[str, str]
+    ) -> tuple[httpx.Response | None, str | None]:
+        """One HTTP attempt; transport failures become a readable error string."""
         try:
             async with httpx.AsyncClient(
                 timeout=self._timeout_s, transport=self._transport
@@ -830,25 +936,97 @@ class OpenAICompatibleModel:
                 response = await client.post(
                     f"{self._base_url}/chat/completions", json=body, headers=headers
                 )
-                response.raise_for_status()
-                parsed: object = response.json()
-                return parsed, None
-        except httpx.HTTPStatusError as exc:
-            return None, (
-                f"HTTP {exc.response.status_code}: {exc.response.text[:300]}"
-            )
-        except (httpx.HTTPError, ValueError) as exc:
+                return response, None
+        except httpx.HTTPError as exc:
             return None, f"{type(exc).__name__}: {exc}"
+
+    async def _post(self, body: dict[str, object]) -> object:
+        """POST with serialisation, 31 s spacing, and two 429 retries."""
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        gate = (
+            _endpoint_gate(self._base_url) if self._min_interval_s > 0 else None
+        )
+        attempt = 0
+        while True:
+            if gate is not None:
+                async with gate.lock:
+                    delay = (
+                        gate.last_start + self._min_interval_s - time.monotonic()
+                    )
+                    if delay > 0:
+                        LOGGER.debug(
+                            "waiting %.1fs for the %s rate limit",
+                            delay,
+                            self._base_url,
+                        )
+                        await asyncio.sleep(delay)
+                    gate.last_start = time.monotonic()
+                    self.stats.requests += 1
+                    response, error = await self._send(body, headers)
+            else:
+                self.stats.requests += 1
+                response, error = await self._send(body, headers)
+
+            if error is not None:
+                raise ModelCallError(error)
+            if response is None:  # pragma: no cover - _send never returns this.
+                raise ModelCallError("empty HTTP response")
+            if response.status_code == 429:
+                retry_after = _retry_after_seconds(response)
+                if attempt < self._max_retries:
+                    attempt += 1
+                    self.stats.retries += 1
+                    delay = max(
+                        self._retry_backoff_s * (2 ** (attempt - 1)),
+                        retry_after or 0.0,
+                    )
+                    LOGGER.warning(
+                        "HTTP 429 from %s; retry %d/%d in %.1fs",
+                        self._base_url,
+                        attempt,
+                        self._max_retries,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                self.stats.rate_limited += 1
+                raise RateLimitedError(
+                    "rate_limited: "
+                    f"{self._base_url} returned HTTP 429 after "
+                    f"{attempt + 1} attempt(s)"
+                    + (
+                        f"; server asked for {retry_after:g}s"
+                        if retry_after is not None
+                        else ""
+                    ),
+                    endpoint=self._base_url,
+                    attempts=attempt + 1,
+                    retry_after_s=retry_after,
+                )
+            if response.status_code >= 400:
+                raise ModelCallError(
+                    f"HTTP {response.status_code}: {response.text[:300]}"
+                )
+            try:
+                parsed: object = response.json()
+            except ValueError as exc:
+                raise ModelCallError(f"response was not JSON: {exc}") from exc
+            return parsed
 
     async def complete(self, request: ModelRequest) -> ModelReply:
         """Post one chat-completions request and extract the answer payload."""
-        body, error = await self._post(self._body(request))
-        if error is not None or body is None:
+        try:
+            body = await self._post(self._body(request))
+        except RateLimitedError:
+            raise
+        except ModelCallError as exc:
             return ModelReply(
                 payload=None,
                 raw_text="",
                 via_tool_call=False,
-                error=error or "empty response body",
+                error=str(exc),
             )
         return _reply_from_body(body, expect_tool=self.structured_output == "tool")
 
@@ -911,8 +1089,14 @@ async def answer_question(
     *,
     model: StructuredModel,
     calibration: Calibration,
+    force_generation: bool = False,
 ) -> AnswerResponse:
-    """Retrieve-to-answer validation: refuse, call the model, drop bad claims."""
+    """Retrieve-to-answer validation: refuse, call the model, drop bad claims.
+
+    ``force_generation`` skips the calibrated low-score refusal only; an empty
+    context is still a refusal, and the model's claims still face the same
+    citation contract.
+    """
     context = tuple(chunks)
     closest = tuple(_passage(chunk) for chunk in context[:CLOSEST_PASSAGES])
     top_score = context[0].rerank_score if context else None
@@ -921,7 +1105,7 @@ async def answer_question(
     )
     info = calibration.info()
 
-    if calibration.calibrated and probability is not None:
+    if not force_generation and calibration.calibrated and probability is not None:
         threshold = calibration.threshold
         if threshold is not None and probability < threshold:
             return _refusal(
@@ -931,6 +1115,7 @@ async def answer_question(
                 info=info,
                 probability=probability,
                 validation=ValidationReport(),
+                force_generation=force_generation,
             )
     if not context:
         return _refusal(
@@ -940,6 +1125,7 @@ async def answer_question(
             info=info,
             probability=probability,
             validation=ValidationReport(),
+            force_generation=force_generation,
         )
 
     system, user = build_prompts(question, context)
@@ -980,6 +1166,7 @@ async def answer_question(
             validation=ValidationReport(
                 schema_failures=schema_failures, repair_turns=repair_turns
             ),
+            force_generation=force_generation,
         )
 
     if raw.insufficient_evidence:
@@ -995,6 +1182,7 @@ async def answer_question(
                 repair_turns=repair_turns,
             ),
             model_reason=raw.reason,
+            force_generation=force_generation,
         )
 
     kept, counts = validate_claims(raw.claims, context)
@@ -1016,6 +1204,7 @@ async def answer_question(
             info=info,
             probability=probability,
             validation=report,
+            force_generation=force_generation,
         )
     return AnswerResponse(
         claims=tuple(kept),
@@ -1028,6 +1217,7 @@ async def answer_question(
         refusal_probability=probability,
         calibration=info,
         uncalibrated=calibration.uncalibrated,
+        forced_generation=force_generation,
     )
 
 
@@ -1066,6 +1256,7 @@ def _refusal(
     probability: float | None,
     validation: ValidationReport,
     model_reason: str | None = None,
+    force_generation: bool = False,
 ) -> AnswerResponse:
     return AnswerResponse(
         claims=(),
@@ -1079,6 +1270,7 @@ def _refusal(
         calibration=info,
         uncalibrated=info.uncalibrated,
         model_reason=model_reason,
+        forced_generation=force_generation,
     )
 
 
@@ -1096,6 +1288,9 @@ def build_model(settings: Settings) -> StructuredModel:
         structured_output=settings.structured_output,
         api_key=settings.model_api_key,
         timeout_s=settings.model_timeout_s,
+        min_interval_s=settings.model_min_interval_s,
+        max_retries=settings.model_max_retries,
+        retry_backoff_s=settings.model_retry_backoff_s,
     )
 
 
@@ -1135,14 +1330,15 @@ async def probe_tool_choice(model: OpenAICompatibleModel) -> ProbeVerdict:
     )
     body = model._body(request)  # the probe inspects the wire body it will send.
     tool_choice_sent = isinstance(body.get("tool_choice"), dict)
-    payload, error = await model._post(body)
-    if error is not None or payload is None:
+    try:
+        payload = await model._post(body)
+    except ModelCallError as exc:
         return ProbeVerdict(
             endpoint=model._base_url,
             made_request=True,
             tool_choice_sent=tool_choice_sent,
             tool_call_returned=None,
-            detail=f"request failed: {error or 'empty response'}",
+            detail=f"request failed: {exc}",
         )
     data = _as_dict(payload) or {}
     received = data.get("received_tool_choice")
@@ -1266,6 +1462,128 @@ async def probe_local_client() -> ProbeVerdict:
             "unverified"
         ),
     )
+
+
+@dataclass(frozen=True)
+class StructuredProbeVerdict:
+    """The recorded outcome of probing tool mode, then JSON mode if needed."""
+
+    endpoint: str
+    model: str
+    mode: StructuredOutputMode
+    tool_choice_sent: bool
+    tool_call_returned: bool | None
+    json_mode_ok: bool | None
+    detail: str
+    checked_at: str
+    wall_clock_s: float
+
+    def as_dict(self) -> dict[str, object]:
+        """JSON-safe artifact, including the mode the service will use."""
+        return {
+            "endpoint": self.endpoint,
+            "model": self.model,
+            "mode": self.mode,
+            "tool_choice_sent": self.tool_choice_sent,
+            "tool_call_returned": self.tool_call_returned,
+            "json_mode_ok": self.json_mode_ok,
+            "detail": self.detail,
+            "checked_at": self.checked_at,
+            "wall_clock_s": round(self.wall_clock_s, 3),
+        }
+
+
+async def probe_structured_output(
+    settings: Settings,
+    *,
+    transport: httpx.AsyncBaseTransport | None = None,
+    artifact_path: Path | None = None,
+) -> StructuredProbeVerdict:
+    """Probe the configured endpoint and record tool or JSON mode.
+
+    Tool calling is tried first with a real forced call. If the endpoint
+    returns content instead, JSON mode is probed with a second real request and
+    becomes the recorded mode. The artifact is what ``DOCQA_STRUCTURED_OUTPUT=auto``
+    reads; a stale artifact for another endpoint or model is ignored.
+    """
+    if settings.model_base_url is None:
+        raise ModelCallError(
+            "no DOCQA_MODEL_BASE_URL configured; there is nothing to probe"
+        )
+    started = time.monotonic()
+    tool_model = OpenAICompatibleModel(
+        settings.model_base_url,
+        settings.model_name,
+        structured_output="tool",
+        api_key=settings.model_api_key,
+        timeout_s=settings.model_timeout_s,
+        transport=transport,
+        min_interval_s=settings.model_min_interval_s,
+        max_retries=settings.model_max_retries,
+        retry_backoff_s=settings.model_retry_backoff_s,
+    )
+    tool_verdict = await probe_tool_choice(tool_model)
+    mode: StructuredOutputMode = "tool"
+    json_mode_ok: bool | None = None
+    detail = tool_verdict.detail
+
+    if tool_verdict.honoured is not True:
+        mode = "json"
+        json_model = OpenAICompatibleModel(
+            settings.model_base_url,
+            settings.model_name,
+            structured_output="json",
+            api_key=settings.model_api_key,
+            timeout_s=settings.model_timeout_s,
+            transport=transport,
+            min_interval_s=settings.model_min_interval_s,
+            max_retries=settings.model_max_retries,
+            retry_backoff_s=settings.model_retry_backoff_s,
+        )
+        request = ModelRequest(
+            question="Probe JSON mode only.",
+            system_prompt=(
+                "Return one JSON object with claims=[] and "
+                "insufficient_evidence=true. No prose."
+            ),
+            user_prompt="Probe only.",
+            chunks=(),
+        )
+        try:
+            reply = await json_model.complete(request)
+            json_mode_ok = reply.error is None and isinstance(reply.payload, dict)
+            detail = (
+                f"{tool_verdict.detail}; JSON fallback "
+                + (
+                    "returned a parseable payload"
+                    if json_mode_ok
+                    else f"failed: {reply.error or 'no JSON payload'}"
+                )
+            )
+        except RateLimitedError as exc:
+            json_mode_ok = False
+            detail = f"{tool_verdict.detail}; JSON fallback failed: {exc}"
+
+    verdict = StructuredProbeVerdict(
+        endpoint=tool_model.endpoint,
+        model=settings.model_name,
+        mode=mode,
+        tool_choice_sent=tool_verdict.tool_choice_sent,
+        tool_call_returned=tool_verdict.tool_call_returned,
+        json_mode_ok=json_mode_ok,
+        detail=detail,
+        checked_at=datetime.now(UTC).isoformat(),
+        wall_clock_s=time.monotonic() - started,
+    )
+    path = artifact_path or settings.structured_output_probe_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(verdict.as_dict(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+    return verdict
 
 
 def calibration_fit_hash(pairs_path: Path) -> str:

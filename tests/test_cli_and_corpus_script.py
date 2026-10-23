@@ -49,14 +49,32 @@ def test_ingest_check_accepts_the_fetched_corpus() -> None:
     assert main(["ingest", "--check"]) == 0
 
 
-def test_help_lists_exactly_the_four_verbs(capsys: pytest.CaptureFixture[str]) -> None:
+def test_help_lists_exactly_the_supported_verbs(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     with pytest.raises(SystemExit) as raised:
         main(["--help"])
     assert raised.value.code == 0
     output = capsys.readouterr().out
     verbs = output.split("{", 1)[1].split("}", 1)[0].split(",")
-    assert set(verbs) == {"ingest", "serve", "eval", "judge-check"}
+    assert set(verbs) == {
+        "ingest",
+        "serve",
+        "ask",
+        "warm",
+        "probe",
+        "eval",
+        "judge-check",
+    }
     assert "probe-tool-choice" not in output
+
+
+def test_live_script_forwards_to_the_docqa_command() -> None:
+    script = (PROJECT_ROOT / "scripts" / "live.sh").read_text(encoding="utf-8")
+    assert 'exec uv run docqa "$@"' in script
+    assert "bash scripts/live.sh docqa" not in script
+    assert "bash scripts/live.sh probe --json" in script
+    assert 'bash scripts/live.sh ask --question "How many identical layers ...?"' in script
 
 
 def _run_fetch_corpus(*args: str) -> subprocess.CompletedProcess[str]:

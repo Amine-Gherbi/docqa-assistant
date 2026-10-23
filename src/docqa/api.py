@@ -11,6 +11,7 @@ responses carry ``"uncalibrated": true`` in their metadata.
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
 import logging
@@ -29,18 +30,19 @@ from docqa.answer import (
     AnswerResponse,
     Calibration,
     ModelCallError,
+    RateLimitedError,
     StructuredModel,
     answer_question,
     build_model,
     load_calibration,
 )
+from docqa.cache import AnswerCache, trace_payload
 from docqa.config import PROJECT_ROOT, Settings, get_settings
 from docqa.db import make_engine, make_session_factory, session_scope
 from docqa.ingest.embedder import build_embedder
 from docqa.rerank import build_reranker
 from docqa.retrieval import (
     PgCandidateSource,
-    RerankTraceHit,
     RetrievalResult,
     RetrievalTrace,
     RetrievedChunk,
@@ -128,45 +130,6 @@ class AnswerService:
         return response, trace
 
 
-def _trace_payload(
-    trace: RetrievalTrace, response: AnswerResponse, calibration: Calibration
-) -> dict[str, object]:
-    """Serialise the trace and attach the answer-level refusal numbers."""
-    top = trace.rerank_hits[0] if trace.rerank_hits else None
-    return {
-        "mode": trace.mode,
-        "embedder": trace.embedder,
-        "reranker": trace.reranker,
-        "vector_hits": [dataclasses.asdict(hit) for hit in trace.vector_hits],
-        "lexical_hits": [dataclasses.asdict(hit) for hit in trace.lexical_hits],
-        "fusion_hits": [dataclasses.asdict(hit) for hit in trace.fusion_hits],
-        "rerank_hits": [
-            {
-                **dataclasses.asdict(hit),
-                "calibrated_probability": _calibrated(calibration, hit),
-            }
-            for hit in trace.rerank_hits
-        ],
-        "context_chunk_ids": list(trace.context_chunk_ids),
-        "context_tokens": trace.context_tokens,
-        "refusal": {
-            "top_rerank_score": None if top is None else top.rerank_score,
-            "top_probability": response.refusal_probability,
-            "threshold": calibration.threshold,
-            "decision": (
-                "refused" if response.insufficient_evidence else "answered"
-            ),
-            "reason": response.reason,
-            "uncalibrated": calibration.uncalibrated,
-        },
-    }
-
-
-def _calibrated(calibration: Calibration, hit: RerankTraceHit) -> float | None:
-    """Apply the Platt scaling to one reranked candidate."""
-    return calibration.probability(hit.rerank_score)
-
-
 def create_app(
     *,
     settings: Settings | None = None,
@@ -176,6 +139,8 @@ def create_app(
     model: StructuredModel | None = None,
     retriever: Retriever | None = None,
     trace_retriever: TraceRetriever | None = None,
+    answer_cache: AnswerCache | None = None,
+    cache_path: Path | None = None,
 ) -> FastAPI:
     """Create the application, refusing to boot without a usable calibration.
 
@@ -194,6 +159,11 @@ def create_app(
         )
     )
     chosen_model = model if model is not None else build_model(resolved)
+    chosen_cache = (
+        answer_cache
+        if answer_cache is not None
+        else AnswerCache.load(cache_path or resolved.demo_answers_path)
+    )
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -214,6 +184,7 @@ def create_app(
     application.state.model = chosen_model
     application.state.retriever = retriever
     application.state.trace_retriever = trace_retriever
+    application.state.answer_cache = chosen_cache
     application.add_middleware(
         CORSMiddleware,
         allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -226,18 +197,41 @@ def create_app(
         """Report the model, structured-output mode, and calibration provenance."""
         app_model = cast(StructuredModel, request.app.state.model)
         app_calibration = cast(Calibration, request.app.state.calibration)
+        app_cache = cast(AnswerCache, request.app.state.answer_cache)
         return {
             "status": "ok",
             "model": app_model.name,
             "model_is_fallback": app_model.structured_output == "extractive",
             "structured_output": app_model.structured_output,
+            "structured_output_source": resolved.structured_output_source,
             "uncalibrated": app_calibration.uncalibrated,
             "calibration": dataclasses.asdict(app_calibration.info()),
+            "demo_cache": {
+                "path": str(app_cache.path),
+                "entries": len(app_cache),
+                "model": app_cache.model,
+                "generated_at": app_cache.generated_at,
+            },
         }
 
-    @application.post("/ask")
-    async def ask(payload: AskPayload, request: Request) -> dict[str, object]:
-        """Answer one question; every returned claim is server-validated."""
+    @application.post("/ask", response_model=None)
+    async def ask(
+        payload: AskPayload, request: Request
+    ) -> dict[str, object] | JSONResponse:
+        """Serve a recorded demo answer, or call the live model on a miss."""
+        app_cache = cast(AnswerCache, request.app.state.answer_cache)
+        cached = app_cache.get(payload.question)
+        if cached is not None:
+            body = copy.deepcopy(cached.response)
+            body["cached"] = True
+            body["cache"] = {
+                "model": cached.model,
+                "generated_at": cached.generated_at,
+            }
+            body["trace"] = copy.deepcopy(cached.trace)
+            body["citation_render_miss"] = 0
+            return body
+
         app_retriever = cast(Retriever | None, request.app.state.retriever)
         if app_retriever is None:
             raise HTTPException(status_code=503, detail="retriever is not ready")
@@ -253,16 +247,43 @@ def create_app(
                 calibration=app_calibration,
                 trace_retriever=app_trace_retriever,
             ).answer_with_trace(payload.question)
+        except RateLimitedError as exc:
+            LOGGER.warning("live endpoint rate-limited: %s", exc)
+            headers = (
+                {"Retry-After": f"{exc.retry_after_s:g}"}
+                if exc.retry_after_s is not None
+                else None
+            )
+            return JSONResponse(
+                status_code=429,
+                headers=headers,
+                content={
+                    "state": "rate_limited",
+                    "cached": False,
+                    "detail": str(exc),
+                    "retry_after_s": exc.retry_after_s,
+                    "hint": (
+                        "the free endpoint answers once per 30 s; this question "
+                        "is not in data/demo-answers.json"
+                    ),
+                },
+            )
         except ModelCallError as exc:
             LOGGER.error("model call failed: %s", exc)
-            raise HTTPException(
-                status_code=502, detail=f"model endpoint failed: {exc}"
-            ) from exc
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "state": "model_unavailable",
+                    "cached": False,
+                    "detail": f"model endpoint failed: {exc}",
+                },
+            )
         body = dataclasses.asdict(response)
+        body["cached"] = False
         body["trace"] = (
             None
             if trace is None
-            else _trace_payload(trace, response, app_calibration)
+            else trace_payload(trace, response, app_calibration)
         )
         # The server cannot see the browser's text layer. The slot is part of
         # the contract so the UI can show the client-measured count in the same

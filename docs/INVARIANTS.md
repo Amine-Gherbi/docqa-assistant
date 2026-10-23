@@ -13,6 +13,13 @@ fails if it regresses. Invariant 6's reliability half is **unverified**.
 | 6 | The judge model differs from the generator and is pinned by exact id; reliability (Cohen's κ) must be measured before any judge score is claimed | `src/docqa/cli.py:31` (`JUDGE_REQUIRED`), `:254` (`_run_judge_check`), `eval/judge.yaml` | `tests/test_judge_check.py`; **κ unverified** — no endpoint or human anchor set |
 | 7 | ONNX work runs in `anyio.to_thread.run_sync` behind `Semaphore(2)` | `src/docqa/onnx.py:12`, `:15` (`onnx_semaphore`), `:19` (`Semaphore(2)`) | `tests/test_embedder.py` |
 
+The production calibration is fitted on the human gold questions by
+`scripts/fit_calibration_gold.py`; its held-out split and in-sample caveat are
+recorded in `eval/calibration.json` and `docs/EVAL.md`. The
+`DOCQA_FORCE_GENERATION` / `--force-generation` diagnostic bypasses **only**
+invariant 4's score gate for measurement; invariant 2's citation contract still
+runs, and a forced eval records `gate_run: false`.
+
 Also deliberate and tested by absence: generation is **not** streamed, and SSE
 streams validated claims only (`src/docqa/api.py`); `test_citations.py` covers
 the rejection path. `citation_render_miss` is counted client-side in

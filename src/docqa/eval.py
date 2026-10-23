@@ -23,6 +23,7 @@ import hashlib
 import json
 import math
 import os
+import time
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -37,6 +38,7 @@ from docqa.answer import (
     AnswerResponse,
     Calibration,
     ModelCallError,
+    RateLimitedError,
     StructuredModel,
     answer_question,
     build_model,
@@ -59,6 +61,7 @@ Z_95 = 1.959963984540054
 DEFAULT_GOLD_PATH = PROJECT_ROOT / "eval" / "gold.jsonl"
 DEFAULT_REPORT_PATH = PROJECT_ROOT / "eval-report.json"
 DEFAULT_ABLATION_REPORT_PATH = PROJECT_ROOT / "eval-report-ablation.json"
+DEFAULT_FORCED_REPORT_PATH = PROJECT_ROOT / "eval-report-forced.json"
 EXIT_GATE = 6
 
 ANSWERABLE_COUNT = 24
@@ -666,6 +669,10 @@ class EvalConfig:
     k: int = 8
     label: str = "production"
     ablated: bool = False
+    # Diagnostic: bypass the calibrated refusal so the model's own answer rate
+    # is measurable. The report records ``gate_run: false`` and must not be
+    # quoted as a production gate outcome.
+    force_generation: bool = False
 
 
 @dataclass(frozen=True)
@@ -739,6 +746,9 @@ async def evaluate(
     """Run the fixed question set and return the report payload and gates."""
     resolved_config = config or EvalConfig()
     resolved_settings = settings or get_settings()
+    force_generation = (
+        resolved_config.force_generation or resolved_settings.force_generation
+    )
     questions = load_gold(gold_path)
     choice = build_embedder(resolved_settings)
     reranker_choice = build_reranker(mode=os.environ.get("DOCQA_RERANKER", "auto"))
@@ -749,6 +759,10 @@ async def evaluate(
     factory = make_session_factory(engine)
     outcomes: list[QuestionOutcome] = []
     ablation_hits: dict[str, int] = {label: 0 for label, _ in RETRIEVAL_ABLATION}
+    run_started = datetime.now(UTC)
+    monotonic_start = time.monotonic()
+    rate_limit_failures = 0
+    blocked_reason: str | None = None
     try:
         async with factory() as session:
             gold = await resolve_gold(questions, session)
@@ -786,10 +800,27 @@ async def evaluate(
                 error: str | None = None
                 response: AnswerResponse | None
                 try:
-                    response = await _answer(question, selected, model, calibration)
+                    response = await _answer(
+                        question,
+                        selected,
+                        model,
+                        calibration,
+                        force_generation=force_generation,
+                    )
+                except RateLimitedError as exc:
+                    response = None
+                    error = str(exc)
+                    rate_limit_failures += 1
+                    if rate_limit_failures >= 3:
+                        blocked_reason = (
+                            "three exhausted HTTP 429 responses in a row; the run "
+                            "is marked blocked rather than reported as a model result"
+                        )
                 except ModelCallError as exc:
                     response = None
                     error = str(exc)
+                else:
+                    rate_limit_failures = 0
                 elapsed_ms = (datetime.now(UTC) - started).total_seconds() * 1000.0
                 outcomes.append(
                     _build_outcome(
@@ -802,8 +833,15 @@ async def evaluate(
                         error=error,
                     )
                 )
+                if blocked_reason is not None:
+                    break
     finally:
         await engine.dispose()
+
+    finished_at = datetime.now(UTC)
+    wall_clock_s = time.monotonic() - monotonic_start
+    stats = getattr(model, "stats", None)
+    model_stats = None if stats is None else stats.as_dict()
 
     metrics = aggregate(outcomes)
     gates = build_gates(metrics, k=resolved_config.k)
@@ -850,6 +888,17 @@ async def evaluate(
                 "mode": resolved_config.mode,
                 "k": resolved_config.k,
                 "ablated": resolved_config.ablated,
+                "force_generation": force_generation,
+                "gate_run": not force_generation,
+                "started_at": run_started.isoformat(),
+                "finished_at": finished_at.isoformat(),
+                "wall_clock_s": round(wall_clock_s, 1),
+                "wall_clock_min": round(wall_clock_s / 60.0, 2),
+                "questions_measured": len(outcomes),
+                "model_calls": model_stats,
+                "model_min_interval_s": resolved_settings.model_min_interval_s,
+                "rate_limit_failures": rate_limit_failures,
+                "blocked": blocked_reason,
             },
         },
         "questions": [row.as_dict() for row in outcomes],
@@ -876,6 +925,8 @@ async def _answer(
     retrieval: RetrievalResult,
     model: StructuredModel,
     calibration: Calibration,
+    *,
+    force_generation: bool = False,
 ) -> AnswerResponse:
     """Call the answer path with the retrieval result already in hand."""
     return await answer_question(
@@ -883,6 +934,7 @@ async def _answer(
         retrieval.chunks,
         model=model,
         calibration=calibration,
+        force_generation=force_generation,
     )
 
 
@@ -917,10 +969,24 @@ def render(report: EvalReport) -> str:
             f"{cast(list[float], recall['wilson_95'])[1]:.1%}]"
         )
     run = cast(dict[str, object], provenance["run"])
+    gate_run = bool(run.get("gate_run", True))
+    if not gate_run:
+        lines.append(
+            "DIAGNOSTIC RUN (not a gate run): the calibrated refusal was "
+            "bypassed; the gates below describe this diagnostic only."
+        )
     lines.append(
         f"Answer path ({run['label']}: {run['mode']} top-{run['k']}; "
         f"generator: {cast(dict[str, object], provenance['generator'])['name']}):"
     )
+    lines.append(
+        f"Wall clock: {run.get('wall_clock_s')} s "
+        f"({run.get('wall_clock_min')} min); "
+        f"questions measured: {run.get('questions_measured')}; "
+        f"model calls: {run.get('model_calls')}"
+    )
+    if run.get("blocked"):
+        lines.append(f"RUN BLOCKED: {run['blocked']}")
     for key, label in (
         ("answer_rate_answerable", "answer rate (answerable)"),
         ("unanswerable_refusal_rate", "refusal rate (unanswerable)"),
@@ -933,7 +999,7 @@ def render(report: EvalReport) -> str:
         "Stage failures: "
         + ", ".join(f"{stage}={stage_counts.get(stage, 0)}" for stage in STAGES)
     )
-    lines.append("Gates:")
+    lines.append("Gates:" if gate_run else "Gates (diagnostic only):")
     for gate in report.gates:
         state = "PASS" if gate.passed else "FAIL"
         lines.append(

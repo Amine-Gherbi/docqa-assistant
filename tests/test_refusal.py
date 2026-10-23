@@ -118,6 +118,60 @@ async def test_low_score_refuses_before_generation() -> None:
     assert response.calibration.threshold == 0.9
 
 
+async def test_force_generation_bypasses_only_the_low_score_gate() -> None:
+    payload: dict[str, object] = {
+        "claims": [
+            {
+                "text": "The encoder maps tokens to continuous representations.",
+                "citation_ids": [7],
+                "quote": QUOTE,
+            }
+        ],
+        "insufficient_evidence": False,
+    }
+    model = FixedModel(payload)
+    response = await answer_question(
+        "How does the encoder work?",
+        [_chunk(7, score=-2.0)],
+        model=model,
+        calibration=_calibration(a=1.0, b=0.0, threshold=0.9),
+        force_generation=True,
+    )
+
+    assert model.calls == 1
+    assert response.insufficient_evidence is False
+    assert len(response.claims) == 1
+    assert response.claims[0].citations[0].chunk_id == 7
+    assert response.forced_generation is True
+
+
+async def test_force_generation_still_enforces_the_citation_contract() -> None:
+    payload: dict[str, object] = {
+        "claims": [
+            {
+                "text": "The encoder maps input tokens to vectors.",
+                "citation_ids": [7],
+                "quote": "The encoder maps input tokens to vectors.",
+            }
+        ],
+        "insufficient_evidence": False,
+    }
+    model = FixedModel(payload)
+    response = await answer_question(
+        "How does the encoder work?",
+        [_chunk(7, score=-2.0)],
+        model=model,
+        calibration=_calibration(a=1.0, b=0.0, threshold=0.9),
+        force_generation=True,
+    )
+
+    assert model.calls == 1
+    assert response.insufficient_evidence is True
+    assert response.reason == "validation_failed"
+    assert response.claims == ()
+    assert response.forced_generation is True
+
+
 def test_probability_comes_from_the_file_coefficients() -> None:
     calibration = _calibration(a=2.0, b=-3.0, threshold=0.4)
     expected = 1.0 / (1.0 + math.exp(1.0))
@@ -179,6 +233,21 @@ def test_committed_calibration_matches_its_fit_set() -> None:
     assert calibration.fit_set_sha256 == calibration_fit_hash(
         PROJECT_ROOT / "eval" / "calibration_fit_set.json"
     )
+
+
+def test_committed_calibration_records_gold_provenance() -> None:
+    raw = json.loads(
+        (PROJECT_ROOT / "eval" / "calibration.json").read_text(encoding="utf-8")
+    )
+    assert raw["provenance"].startswith("gold-human-v1")
+    assert raw["fit_size"] == 30
+    assert raw["positives"] == 24
+    assert raw["negatives"] == 6
+    held_out = raw["held_out"]
+    assert set(held_out) == {"fit_odd_eval_even", "fit_even_eval_odd"}
+    for split in held_out.values():
+        assert 0.0 <= split["evaluated_balanced_accuracy"] <= 1.0
+    assert raw["in_sample"]["question_decisions"]["answerable_total"] == 24
 
 
 async def test_unanswerable_question_returns_reason_and_two_passages() -> None:
