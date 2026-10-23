@@ -272,8 +272,8 @@ def create_app(
 
     @application.get("/eval/report")
     async def eval_report() -> JSONResponse:
-        """Serve ``eval/eval-report.json`` or an explicit 404 for the UI state."""
-        path = PROJECT_ROOT / "eval" / "eval-report.json"
+        """Serve the committed ``eval-report.json`` or an explicit 404."""
+        path = PROJECT_ROOT / "eval-report.json"
         if not path.is_file():
             raise HTTPException(status_code=404, detail="no eval run yet")
         try:
@@ -287,7 +287,7 @@ def create_app(
     @application.get("/eval-report.json")
     async def eval_report_download() -> FileResponse:
         """Download the committed eval artifact, or 404 when it does not exist."""
-        path = PROJECT_ROOT / "eval" / "eval-report.json"
+        path = PROJECT_ROOT / "eval-report.json"
         if not path.is_file():
             raise HTTPException(status_code=404, detail="no eval run yet")
         return FileResponse(path, media_type="application/json")

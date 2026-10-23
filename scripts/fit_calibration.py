@@ -10,7 +10,7 @@ are machine-generated: each query is a sentence from a real chunk in the local
 corpus (positive) against other chunks from the same corpus (negatives, of which
 the nine highest-scoring are kept as hard negatives). This fit is **optimistic**
 for real question phrasing: the live smoke test reports top-1 reranker scores of
-2.4–6.8 for answerable questions, below the sentence-derived threshold. The
+2.4-6.8 for answerable questions, below the sentence-derived threshold. The
 artifact records its provenance and fit-set hash, and R5 must refit on the
 100-question gold set rather than treating this threshold as an eval result.
 

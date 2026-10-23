@@ -44,9 +44,19 @@ def test_ingest_refuses_missing_file(tmp_path: Path) -> None:
     assert main(["ingest", str(tmp_path / "absent.pdf")]) == 1
 
 
-def test_verify_command_accepts_the_fetched_corpus() -> None:
+def test_ingest_check_accepts_the_fetched_corpus() -> None:
     _require_corpus()
-    assert main(["verify"]) == 0
+    assert main(["ingest", "--check"]) == 0
+
+
+def test_help_lists_exactly_the_four_verbs(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as raised:
+        main(["--help"])
+    assert raised.value.code == 0
+    output = capsys.readouterr().out
+    verbs = output.split("{", 1)[1].split("}", 1)[0].split(",")
+    assert set(verbs) == {"ingest", "serve", "eval", "judge-check"}
+    assert "probe-tool-choice" not in output
 
 
 def _run_fetch_corpus(*args: str) -> subprocess.CompletedProcess[str]:

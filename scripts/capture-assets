@@ -1,0 +1,673 @@
+#!/usr/bin/env python3
+"""Write the hub snapshot for docqa-assistant deterministically.
+
+The script starts the Vite UI (port 5173) and the API (port 8788) if they are
+not already running, drives Chromium through Playwright at 1440x900 with a 2x
+device scale factor, and writes four 2880x1800 WebP files plus ``manifest.json``
+to ``_shared/assets/docqa-assistant``.
+
+Every ``proof.measured[].artifact`` and ``proof.invariants[].test`` names a path
+that exists in this repository; the corresponding file is copied into the
+snapshot's ``proof/`` directory so the hub's ``check:assets`` can resolve it.
+
+Run from anywhere::
+
+    uv run python scripts/capture-assets
+
+The UI can render the citation demo without the API; the eval screenshot needs
+the API only to serve the committed ``eval-report.json``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from collections.abc import Callable
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+UI = ROOT / "ui"
+DEFAULT_OUT = Path("P:/portfolio/_shared/assets/docqa-assistant")
+SHOT_FILES = ("hero.webp", "shot-01.webp", "shot-02.webp", "shot-03.webp")
+WIDTH = 2880
+HEIGHT = 1800
+
+DRIVER = r"""
+const { chromium } = require(process.env.PLAYWRIGHT_PATH);
+const out = process.env.CAPTURE_DIR;
+const base = process.env.CAPTURE_BASE;
+
+(async () => {
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    deviceScaleFactor: 2,
+    colorScheme: 'dark',
+    reducedMotion: 'reduce',
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(30000);
+  const problems = [];
+  page.on('pageerror', (error) => problems.push('pageerror: ' + error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') problems.push('console: ' + message.text());
+  });
+
+  async function loadDemo() {
+    await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
+    await page.locator('button', { hasText: 'Load offline demo' }).click();
+    await page.waitForSelector('.claim');
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="pdf-page-no"]')?.textContent?.trim() === 'p.3',
+    );
+    await page.waitForFunction(
+      () => typeof CSS !== 'undefined' && CSS.highlights && CSS.highlights.has('docqa-citation'),
+      null,
+      { timeout: 15000 },
+    ).catch(() => {});
+    await page.waitForTimeout(800);
+  }
+
+  await loadDemo();
+  await page.locator('[data-testid="trace-toggle"]').click();
+  await page.waitForSelector('.trace-drawer');
+  await page.waitForFunction(
+    () => (document.querySelector('.trace-drawer')?.textContent || '').includes('resolve'),
+  );
+  await page.evaluate(() => {
+    const spans = Array.from(document.querySelectorAll('.textLayer span'));
+    const hit = spans.find((span) => (span.textContent || '').toLowerCase().includes('quokka'));
+    if (hit) hit.scrollIntoView({ block: 'start' });
+    const answer = document.querySelector('.answer-pane');
+    if (answer) answer.scrollTop = 0;
+    const body = document.querySelector('.drawer-body');
+    if (body) body.scrollTop = 0;
+  });
+  await page.waitForTimeout(700);
+  await page.screenshot({ path: out + '/hero.png' });
+
+  await page.goto(base + '/eval', { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(
+    () => {
+      const text = document.querySelector('.eval-page')?.textContent || '';
+      return text.includes('report loaded') || Boolean(document.querySelector('.empty-report'));
+    },
+    null,
+    { timeout: 30000 },
+  ).catch(() => {});
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: out + '/shot-01.png' });
+
+  await page.evaluate(() => {
+    document.getElementById('gallery-heading')?.scrollIntoView({ block: 'start' });
+  });
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: out + '/shot-02.png' });
+
+  await loadDemo();
+  await page.locator('[data-testid="trace-toggle"]').click();
+  await page.waitForSelector('.trace-drawer');
+  await page.evaluate(() => {
+    const sections = Array.from(document.querySelectorAll('.trace-section'));
+    const target = sections.find((section) =>
+      (section.textContent || '').includes('Cross-encoder rerank'),
+    );
+    const body = document.querySelector('.drawer-body');
+    if (body && target) body.scrollTop = target.offsetTop - 8;
+  });
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: out + '/shot-03.png' });
+
+  if (problems.length > 0) {
+    console.error('browser problems:\n' + problems.join('\n'));
+  }
+  await browser.close();
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+"""
+
+
+def _port_open(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _health(url: str) -> bool:
+    try:
+        with urllib.request.urlopen(url, timeout=1) as response:
+            return response.status == 200
+    except (OSError, urllib.error.URLError):
+        return False
+
+
+def _wait(predicate: Callable[[], bool], timeout: float, interval: float = 0.5) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False
+
+
+def _start(command: list[str], cwd: Path, log_path: Path) -> subprocess.Popen[bytes]:
+    log = log_path.open("wb")
+    creationflags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+    return subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+    )
+
+
+def _stop(process: subprocess.Popen[bytes] | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            capture_output=True,
+            check=False,
+        )
+    else:
+        process.terminate()
+    try:
+        process.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        process.kill()
+
+
+def _run_browser(output: Path, tmp: Path) -> None:
+    playwright = UI / "node_modules" / "playwright"
+    if not playwright.is_dir():
+        raise SystemExit(
+            "Playwright is not installed in ui/node_modules; run `npm install` in ui/."
+        )
+    driver = tmp / "capture-driver.cjs"
+    driver.write_text(DRIVER, encoding="utf-8")
+    env = os.environ.copy()
+    env["PLAYWRIGHT_PATH"] = str(playwright)
+    env["CAPTURE_DIR"] = str(tmp)
+    env["CAPTURE_BASE"] = "http://127.0.0.1:5173"
+    result = subprocess.run(
+        ["node", str(driver)],
+        cwd=UI,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        sys.stderr.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        raise SystemExit(f"Playwright capture failed with exit {result.returncode}")
+    if result.stderr.strip():
+        sys.stderr.write(result.stderr)
+
+
+def _to_webp(png: Path, webp: Path) -> None:
+    from PIL import Image
+
+    with Image.open(png) as image:
+        if image.size != (WIDTH, HEIGHT):
+            raise SystemExit(
+                f"{png.name} is {image.size[0]}x{image.size[1]}, expected {WIDTH}x{HEIGHT}"
+            )
+        image.convert("RGB").save(webp, "WEBP", quality=92, method=6)
+
+
+def _copy_proof(out: Path, repo_paths: list[str]) -> None:
+    for relative in repo_paths:
+        source = ROOT / relative
+        if not source.is_file():
+            raise SystemExit(f"proof artifact is missing from the repo: {relative}")
+        target = out / "proof" / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+
+
+def _safe_relative(value: object) -> bool:
+    if not isinstance(value, str) or not value.strip():
+        return False
+    if "\\" in value or "\0" in value or value.startswith(("/", "\\")):
+        return False
+    if len(value) > 1 and value[1] == ":":
+        return False
+    return all(segment not in {"", ".", ".."} for segment in value.split("/"))
+
+
+def _validate_snapshot(out: Path) -> None:
+    """Mirror the hub's manifest-schema.mjs and check-assets.mjs.
+
+    The hub checker lives in another repository and cannot be imported from
+    this session; this mirror is the closest runnable check. It is deliberately
+    strict about the fields the hub validates.
+    """
+    from PIL import Image
+
+    manifest_path = out / "manifest.json"
+    if not manifest_path.is_file():
+        raise SystemExit(f"missing {manifest_path}")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    errors: list[str] = []
+
+    project = manifest.get("project")
+    if project != out.name:
+        errors.append(f"project is {project!r}, expected {out.name!r}")
+    for key, maximum in (("title", 80), ("oneLiner", 180)):
+        value = manifest.get(key)
+        if not isinstance(value, str) or not value.strip():
+            errors.append(f"{key} must be a non-empty string")
+        elif maximum is not None and len(value) > maximum:
+            errors.append(f"{key} is longer than {maximum} characters")
+    stack = manifest.get("stack")
+    if not isinstance(stack, list) or not 1 <= len(stack) <= 6:
+        errors.append("stack must contain 1..6 entries")
+    elif not all(isinstance(item, str) and 0 < len(item) <= 40 for item in stack):
+        errors.append("stack entries must be non-empty strings of at most 40 characters")
+    generated = manifest.get("generatedAt")
+    try:
+        parsed_generated = dt.datetime.fromisoformat(str(generated))
+        if parsed_generated.tzinfo is None:
+            raise ValueError("no offset")
+    except ValueError:
+        errors.append("generatedAt must be an ISO timestamp with an offset")
+    if manifest.get("seeded") is not True:
+        errors.append("seeded must be true")
+
+    shots = manifest.get("shots")
+    if not isinstance(shots, list) or len(shots) != 4:
+        errors.append("shots must contain exactly 4 entries")
+    else:
+        for index, (shot, expected) in enumerate(zip(shots, SHOT_FILES, strict=True)):
+            if not isinstance(shot, dict):
+                errors.append(f"shots[{index}] must be an object")
+                continue
+            if shot.get("file") != expected:
+                errors.append(f"shots[{index}].file must be {expected}")
+            if shot.get("width") != WIDTH or shot.get("height") != HEIGHT:
+                errors.append(f"shots[{index}] must declare {WIDTH}x{HEIGHT}")
+            if not isinstance(shot.get("alt"), str) or not shot["alt"].strip():
+                errors.append(f"shots[{index}].alt must be a non-empty string")
+            image_path = out / expected
+            if not image_path.is_file():
+                errors.append(f"{expected} is absent")
+                continue
+            with Image.open(image_path) as image:
+                if image.format != "WEBP":
+                    errors.append(f"{expected} is {image.format}, expected WEBP")
+                if image.size != (WIDTH, HEIGHT):
+                    errors.append(
+                        f"{expected} is {image.size[0]}x{image.size[1]}, "
+                        f"expected {WIDTH}x{HEIGHT}"
+                    )
+
+    proof = manifest.get("proof")
+    if not isinstance(proof, dict):
+        errors.append("proof must be an object")
+    else:
+        measured = proof.get("measured")
+        if not isinstance(measured, list) or not measured:
+            errors.append("proof.measured must contain at least one entry")
+        else:
+            for index, entry in enumerate(measured):
+                if not isinstance(entry, dict):
+                    errors.append(f"proof.measured[{index}] must be an object")
+                    continue
+                for field in ("label", "value", "method", "artifact"):
+                    value = entry.get(field)
+                    if not isinstance(value, str) or not value.strip():
+                        errors.append(f"proof.measured[{index}].{field} is required")
+                artifact = entry.get("artifact")
+                if not _safe_relative(artifact):
+                    errors.append(
+                        f"proof.measured[{index}].artifact is not a safe relative path"
+                    )
+                elif not (out / "proof" / str(artifact)).is_file():
+                    errors.append(
+                        f"proof.measured[{index}].artifact is absent from snapshot: "
+                        f"{artifact}"
+                    )
+        invariants = proof.get("invariants")
+        if not isinstance(invariants, list) or not invariants:
+            errors.append("proof.invariants must contain at least one entry")
+        else:
+            for index, entry in enumerate(invariants):
+                if not isinstance(entry, dict):
+                    errors.append(f"proof.invariants[{index}] must be an object")
+                    continue
+                for field in ("claim", "test"):
+                    value = entry.get(field)
+                    if not isinstance(value, str) or not value.strip():
+                        errors.append(f"proof.invariants[{index}].{field} is required")
+                test = entry.get("test")
+                if not _safe_relative(test):
+                    errors.append(
+                        f"proof.invariants[{index}].test is not a safe relative path"
+                    )
+                elif not (
+                    str(test).startswith("tests/")
+                    or str(test).endswith((".test.js", ".test.ts", ".test.tsx"))
+                ):
+                    errors.append(
+                        f"proof.invariants[{index}].test is not a test path: {test}"
+                    )
+                elif not (out / "proof" / str(test)).is_file():
+                    errors.append(
+                        f"proof.invariants[{index}].test is absent from snapshot: {test}"
+                    )
+        limits = proof.get("limits")
+        if not isinstance(limits, list) or len(limits) < 3:
+            errors.append("proof.limits must contain at least 3 entries")
+        elif not all(isinstance(item, str) and item.strip() for item in limits):
+            errors.append("proof.limits entries must be non-empty strings")
+
+    if errors:
+        for error in errors:
+            print(f"[assets-mirror] FAIL {error}", file=sys.stderr)
+        raise SystemExit(f"{len(errors)} manifest error(s)")
+    print(
+        "[assets-mirror] valid: 4 WebP at 2880x1800, "
+        f"{len(proof['measured'])} measurements, "
+        f"{len(proof['invariants'])} invariants, "
+        f"{len(proof['limits'])} limits"
+    )
+
+
+def _manifest() -> dict[str, object]:
+    measured = [
+        {
+            "label": "recall@8, production (hybrid + RRF + rerank)",
+            "value": "18/24 (75.0%), Wilson 95% [55.1%, 88.0%]",
+            "method": (
+                "uv run docqa eval; Windows 11 Pro 10.0.26200, ONNX CPU; 2026-10-23"
+            ),
+            "artifact": "eval-report.json",
+        },
+        {
+            "label": "unanswerable refusal, production",
+            "value": "6/6 (100%), Wilson 95% [61.0%, 100%]",
+            "method": (
+                "uv run docqa eval; Windows 11 Pro 10.0.26200, ONNX CPU; 2026-10-23"
+            ),
+            "artifact": "docs/EVAL.md",
+        },
+        {
+            "label": "answer rate, production (extractive fallback, no model key)",
+            "value": "5/24 (20.8%), Wilson 95% [9.2%, 40.5%]",
+            "method": (
+                "uv run docqa eval; Windows 11 Pro 10.0.26200, ONNX CPU; 2026-10-23"
+            ),
+            "artifact": "eval-report.json",
+        },
+        {
+            "label": "recall@3, deliberately weakened vector-only retriever",
+            "value": "15/24 (62.5%), gate FAIL",
+            "method": (
+                "uv run docqa eval --ablate vector-only; Windows 11 Pro 10.0.26200, "
+                "ONNX CPU; 2026-10-23"
+            ),
+            "artifact": "eval-report-ablation.json",
+        },
+        {
+            "label": "retrieval pipeline p95 latency, 20 warm calls",
+            "value": "2825.9 ms",
+            "method": (
+                "uv run python scripts/ablation.py; Windows 11 Pro, 12 logical CPUs, "
+                "ONNX CPU; 2026-10-23"
+            ),
+            "artifact": "docs/ABLATION.md",
+        },
+        {
+            "label": "chunk token cap on the pinned corpus",
+            "value": "max 430 tokens; 0 clipped vectors",
+            "method": (
+                "uv run docqa ingest data/corpus/*.pdf; Windows 11 Pro 10.0.26200; "
+                "2026-10-23"
+            ),
+            "artifact": "docs/CORPUS.md",
+        },
+    ]
+    invariants = [
+        {
+            "claim": (
+                "A chunk longer than 448 model tokens fails ingest instead of storing "
+                "a truncated vector."
+            ),
+            "test": "tests/test_chunking.py",
+        },
+        {
+            "claim": (
+                "A claim without an in-context citation, or whose quote is not a "
+                "normalised substring of the cited chunk, is dropped."
+            ),
+            "test": "tests/test_citations.py",
+        },
+        {
+            "claim": "Ingest refuses a PDF whose SHA-256 differs from corpus.lock.json.",
+            "test": "tests/test_lock.py",
+        },
+        {
+            "claim": (
+                "The refusal threshold comes from eval/calibration.json at boot and is "
+                "never hand-tuned."
+            ),
+            "test": "tests/test_refusal.py",
+        },
+        {
+            "claim": (
+                "Every rate carries a Wilson 95% interval and its denominator; the "
+                "earliest failed stage is recorded per question."
+            ),
+            "test": "tests/test_eval.py",
+        },
+        {
+            "claim": (
+                "The judge model differs from the generator and is pinned by exact id."
+            ),
+            "test": "tests/test_judge_check.py",
+        },
+        {
+            "claim": "ONNX work runs in a worker thread behind Semaphore(2).",
+            "test": "tests/test_embedder.py",
+        },
+    ]
+    limits = [
+        (
+            "No generator model key on this machine: answers use the labelled "
+            "extractive fallback, and the answer-rate gate fails at 5/24."
+        ),
+        (
+            "The eval set is 30 questions (24 answerable), not the planned 100; the "
+            "Wilson intervals are correspondingly wide."
+        ),
+        (
+            "Judge reliability (Cohen's kappa) is unverified: eval/judge.yaml is pinned, "
+            "but no judge endpoint or human anchor set exists."
+        ),
+        (
+            "Local only: no hosted URL, no demo video, and the k6 concurrency scenario "
+            "is unverified because k6 is not installed on this machine."
+        ),
+        (
+            "The corpus PDFs are not committed; this snapshot is reproducible only after "
+            "scripts/fetch-corpus has materialised the locked files."
+        ),
+    ]
+    shots = [
+        {
+            "file": "hero.webp",
+            "width": WIDTH,
+            "height": HEIGHT,
+            "alt": (
+                "Ask page with an offline demo answer, the cited span highlighted in the "
+                "PDF pane, and the retrieval trace drawer open."
+            ),
+        },
+        {
+            "file": "shot-01.webp",
+            "width": WIDTH,
+            "height": HEIGHT,
+            "alt": (
+                "Eval page showing the committed report, gate values, denominators, and "
+                "Wilson intervals."
+            ),
+        },
+        {
+            "file": "shot-02.webp",
+            "width": WIDTH,
+            "height": HEIGHT,
+            "alt": (
+                "Failure gallery: three cases where a naive answer would be wrong, with "
+                "the passages and numbers behind each verdict."
+            ),
+        },
+        {
+            "file": "shot-03.webp",
+            "width": WIDTH,
+            "height": HEIGHT,
+            "alt": (
+                "Cross-encoder rerank section of the trace drawer: rerank rank, score, "
+                "calibrated probability, and kept/dropped for each candidate."
+            ),
+        },
+    ]
+    for shot, expected in zip(shots, SHOT_FILES, strict=True):
+        if shot["file"] != expected:
+            raise SystemExit(f"shot order drifted: {shot['file']} != {expected}")
+    return {
+        "project": "docqa-assistant",
+        "title": "DocQA Assistant",
+        "oneLiner": (
+            "Ask a question about a PDF corpus and get claims that point at highlighted "
+            "spans, with an inspectable retrieval trace and a calibrated refusal."
+        ),
+        "stack": [
+            "Python 3.12",
+            "FastAPI",
+            "PostgreSQL 16 + pgvector",
+            "React + Vite",
+            "PDF.js",
+        ],
+        "generatedAt": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
+        "seeded": True,
+        "shots": shots,
+        "proof": {
+            "measured": measured,
+            "invariants": invariants,
+            "limits": limits,
+        },
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument(
+        "--keep-servers",
+        action="store_true",
+        help="leave the UI and API processes running after capture",
+    )
+    parser.add_argument(
+        "--print-manifest",
+        action="store_true",
+        help="print the manifest to stdout after writing it",
+    )
+    parser.add_argument(
+        "--validate-only",
+        action="store_true",
+        help="validate an existing snapshot without capturing or starting servers",
+    )
+    args = parser.parse_args()
+    out: Path = args.out.resolve()
+
+    if args.validate_only:
+        _validate_snapshot(out)
+        return 0
+
+    out.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix="docqa-capture-"))
+    ui_proc: subprocess.Popen[bytes] | None = None
+    api_proc: subprocess.Popen[bytes] | None = None
+    try:
+        if not _port_open(5173):
+            npm = shutil.which("npm.cmd") or shutil.which("npm") or "npm"
+            print(f"starting UI: {npm} run dev (log: {tmp / 'ui.log'})")
+            ui_proc = _start(
+                [npm, "run", "dev", "--", "--host", "127.0.0.1"], UI, tmp / "ui.log"
+            )
+            if not _wait(lambda: _port_open(5173), 120):
+                raise SystemExit("UI did not listen on 127.0.0.1:5173 within 120s")
+        else:
+            print("UI already listening on 127.0.0.1:5173")
+
+        if not _health("http://127.0.0.1:8788/health"):
+            uv = shutil.which("uv") or "uv"
+            print(f"starting API: {uv} run docqa serve --port 8788 (log: {tmp / 'api.log'})")
+            api_proc = _start(
+                [uv, "run", "docqa", "serve", "--port", "8788"], ROOT, tmp / "api.log"
+            )
+            if not _wait(lambda: _health("http://127.0.0.1:8788/health"), 180):
+                print(
+                    "WARNING: API did not become healthy; the eval shot may show the "
+                    "explicit empty-report state instead of a report.",
+                    file=sys.stderr,
+                )
+        else:
+            print("API already healthy on 127.0.0.1:8788")
+
+        print("capturing 1440x900 screenshots at 2x DPR")
+        _run_browser(out, tmp)
+
+        for name in ("hero", "shot-01", "shot-02", "shot-03"):
+            _to_webp(tmp / f"{name}.png", out / f"{name}.webp")
+
+        manifest = _manifest()
+        proof = manifest["proof"]
+        assert isinstance(proof, dict)
+        artifacts = [
+            str(entry["artifact"])
+            for entry in proof["measured"]
+            if isinstance(entry, dict)
+        ] + [
+            str(entry["test"])
+            for entry in proof["invariants"]
+            if isinstance(entry, dict)
+        ]
+        _copy_proof(out, sorted(set(artifacts)))
+        (out / "manifest.json").write_text(
+            json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+        )
+        _validate_snapshot(out)
+
+        for name in SHOT_FILES:
+            path = out / name
+            size = path.stat().st_size
+            print(f"wrote {path} ({size} bytes)")
+        print(f"wrote {out / 'manifest.json'}")
+        if args.print_manifest:
+            print(json.dumps(manifest, indent=2))
+        return 0
+    finally:
+        if not args.keep_servers:
+            _stop(api_proc)
+            _stop(ui_proc)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

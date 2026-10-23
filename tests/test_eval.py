@@ -75,7 +75,7 @@ def test_wilson_interval_bounds_and_empty_sample() -> None:
 def test_missed_gate_makes_the_harness_exit_non_zero() -> None:
     metrics = _aggregate(retrieval_recall=Rate(10, 24))
     gates = build_gates(metrics)
-    assert [(gate.name, gate.passed) for gate in gates][0] == (
+    assert next((gate.name, gate.passed) for gate in gates) == (
         "retrieval_recall_at_8",
         False,
     )
