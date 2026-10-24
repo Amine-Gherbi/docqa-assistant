@@ -16,9 +16,32 @@ Recorded 2026-10-23 on the build machine. No Docker and no hosted service.
 | Reranking | fastembed `Xenova/ms-marco-MiniLM-L-6-v2` (Apache-2.0), ONNX Runtime, CPU |
 | Answer API | `uv run docqa serve` on `127.0.0.1:8788` (CLI default); `GET /health`, `POST /ask`, `GET /eval/report` |
 | UI | `npm --prefix ui run dev` on `http://127.0.0.1:5173`; Vite proxies `/api` to `127.0.0.1:8788` |
-| Screenshots | four 2880x1800 WebP files captured at 1440x900 CSS px with deviceScaleFactor 2, recorded 2026-10-23 |
+| Screenshots | four 2880x1800 WebP files captured at 1440x900 CSS px with deviceScaleFactor 2, re-captured 2026-10-24 in the reading-room theme |
+| UI theme | "reading room": dark page `#16181a`, cream ink `#e9e5dc`, amber citations `#d9a441`, paper document `#f7f4ec` |
 | UI tests | `npm --prefix ui run e2e`: 4 Playwright tests pass — all three citations scroll and highlight, every recorded claim resolves with no render miss; `node ui/scripts/verify_demo_paper.mjs`: 9/9 demo claims resolve against the committed PDF, recorded 2026-10-23 |
 | Judge model | `claude-opus-5-5` pinned in `eval/judge.yaml`, different from the generator; reliability unverified |
+
+## Reading-room palette and contrast (2026-10-24)
+
+The Marginalia UI uses the dark "reading room" identity: page `#16181a`, panel
+`#1d2024`, raised panel `#242830`, cream ink `#e9e5dc`, muted `#a09a8e`, rule
+`#2c3136`, amber accent `#d9a441`, highlight `rgba(217, 164, 65, 0.22)`, and
+paper `#f7f4ec`. The PDF page stays light and is never inverted; the paper tint
+is applied with `mix-blend-mode: multiply`, not by filtering the document.
+
+Ratios are computed with the WCAG 2.x relative-luminance formula,
+`(L_lighter + 0.05) / (L_darker + 0.05)`, not estimated:
+
+| pair | ratio | requirement | result |
+|---|---:|---:|---|
+| cream `#e9e5dc` on page `#16181a` | 14.16:1 | >= 7:1 | pass |
+| muted `#a09a8e` on panel `#1d2024` | 5.85:1 | >= 4.5:1 | pass |
+| amber `#d9a441` on page `#16181a` (text) | 7.91:1 | >= 4.5:1 | pass |
+| amber `#d9a441` on page `#16181a` (UI) | 7.91:1 | >= 3:1 | pass |
+| paper `#f7f4ec` on page `#16181a` | 16.20:1 | paper reads as the lit object | pass |
+
+Supporting pairs in the same theme: cream on panel 13.01:1, muted on page
+6.36:1, amber on panel 7.27:1, and page-coloured text on amber 7.91:1.
 
 ## Embedding path used: real model
 

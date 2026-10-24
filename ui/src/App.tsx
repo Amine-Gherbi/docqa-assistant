@@ -67,10 +67,7 @@ function SiteHeader({ onEval }: { onEval: boolean }) {
   return (
     <header className="site-header">
       <a className="brand" href="/" aria-label="Marginalia home">
-        <span className="brand-mark" aria-hidden="true">
-          M
-        </span>
-        <span className="brand-name">Marginalia</span>
+        Marginalia
       </a>
       <p className="header-line">
         Answers from your PDFs, with the page and passage behind every sentence.
@@ -156,7 +153,9 @@ function Sources({
                   <span className="source-meta">
                     <span className="source-file">{sourceLabel(citation)}</span>
                     <span aria-hidden="true">·</span>
-                    <span>Page {citation.page_no}</span>
+                    <span className="source-page">
+                      Page {citation.page_no}
+                    </span>
                   </span>
                   <span className="source-quote" title={citation.quote}>
                     {formatQuoted(citation.quote)}
