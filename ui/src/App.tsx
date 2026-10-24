@@ -6,6 +6,7 @@ import {
   useState,
   type FormEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react';
 
 import { askQuestion } from './api';
@@ -45,6 +46,15 @@ function sourceLabel(source: { doc_id: string }): string {
   return source.doc_id === DEMO_PAPER.doc_id
     ? DEMO_PAPER.title
     : source.doc_id;
+}
+
+function splitTrailingWord(text: string): { lead: string; tail: string } {
+  const match = /(^|\s)(\S+)\s*$/.exec(text);
+  if (!match) {
+    return { lead: '', tail: text };
+  }
+  const tailStart = match.index + match[1]!.length;
+  return { lead: text.slice(0, tailStart), tail: text.slice(tailStart) };
 }
 
 function collectSources(answer: AskResponse | null): SourceEntry[] {
@@ -89,6 +99,25 @@ function SiteHeader({ onEval }: { onEval: boolean }) {
         </a>
       </nav>
     </header>
+  );
+}
+
+function ClaimText({
+  text,
+  children,
+}: {
+  text: string;
+  children: ReactNode;
+}) {
+  const { lead, tail } = splitTrailingWord(text);
+  return (
+    <p className="claim-text">
+      {lead}
+      <span className="claim-tail">
+        {tail}
+        {children}
+      </span>
+    </p>
   );
 }
 
@@ -466,8 +495,7 @@ function AskPage() {
                       key={`${claimIndex}-${claim.text.slice(0, 24)}`}
                       className="claim"
                     >
-                      <p className="claim-text">
-                        {claim.text}
+                      <ClaimText text={claim.text}>
                         {claim.citations.map((citation) => {
                           const number =
                             sourceNumbers.get(citationKey(citation)) ?? 0;
@@ -481,7 +509,7 @@ function AskPage() {
                             />
                           );
                         })}
-                      </p>
+                      </ClaimText>
                     </li>
                   ))}
                 </ol>
