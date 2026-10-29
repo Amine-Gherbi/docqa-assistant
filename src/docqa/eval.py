@@ -921,6 +921,8 @@ async def evaluate(
             else None
         ),
         threads=resolved_settings.onnx_threads,
+        batch_size=resolved_settings.rerank_batch_size,
+        memory_arena=resolved_settings.onnx_memory_arena,
     )
     calibration = load_calibration(resolved_settings.calibration_path)
     model = build_model(resolved_settings)

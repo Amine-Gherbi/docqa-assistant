@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,7 +9,10 @@ vi.mock('./components/PdfPane', () => ({
   PdfPane: () => null,
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe('real-paper demo', () => {
   it('opens the real paper and shows its title and page count only', () => {
@@ -80,5 +83,86 @@ describe('real-paper demo', () => {
     expect(screen.queryByText(/offline demo/i)).toBeNull();
     expect(screen.queryByText(/20 of 20/i)).toBeNull();
     expect(screen.queryByText(/fixture/i)).toBeNull();
+  });
+});
+
+describe('free-instance cold start', () => {
+  function fakeResponse(body: unknown, status: number): Response {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      statusText: status === 502 ? 'Bad Gateway' : 'OK',
+      json: async () => {
+        if (status >= 400 && typeof body !== 'object') {
+          throw new Error('not json');
+        }
+        return body;
+      },
+    } as Response;
+  }
+
+  it('warms up and retries once instead of showing a bare 502', async () => {
+    const user = userEvent.setup();
+    let releaseWarmup: (() => void) | null = null;
+    const warmupGate = new Promise<Response>((resolve) => {
+      releaseWarmup = () => resolve(fakeResponse({ status: 'ok' }, 200));
+    });
+    const fetchMock = vi
+      .fn()
+      // the warm-up fired on mount
+      .mockResolvedValueOnce(fakeResponse({ status: 'ok' }, 200))
+      // the first question meets a sleeping instance at the Render edge
+      .mockResolvedValueOnce(fakeResponse('Bad Gateway', 502))
+      // the guard's own warm-up, held open until the test has seen the message
+      .mockReturnValueOnce(warmupGate)
+      // the single retry succeeds
+      .mockResolvedValueOnce(
+        fakeResponse(DEMO_QUESTIONS[0]!.answer, 200),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    const field = screen.getByLabelText('Question');
+    await user.clear(field);
+    await user.type(field, 'Which Adam beta2 value does the paper report?');
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+
+    expect(
+      await screen.findByText(/starting the free instance/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    await act(async () => {
+      releaseWarmup!();
+    });
+
+    await waitFor(() =>
+      expect(screen.queryByText(/starting the free instance/i)).toBeNull(),
+    );
+    expect(document.querySelectorAll('.claim').length).toBeGreaterThan(0);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not retry an answer that is not a cold-start status', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(fakeResponse({ status: 'ok' }, 200))
+      .mockResolvedValueOnce(fakeResponse({ detail: 'bad question' }, 422));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<App />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    const field = screen.getByLabelText('Question');
+    await user.clear(field);
+    await user.type(field, 'A question with no recorded answer?');
+    await user.click(screen.getByRole('button', { name: 'Ask' }));
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(/starting the free instance/i)).toBeNull();
   });
 });

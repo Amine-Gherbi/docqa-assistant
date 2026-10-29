@@ -371,7 +371,13 @@ def test_api_serves_a_cached_answer_with_model_and_date(tmp_path: Path) -> None:
 def test_pg_retriever_passes_the_model_cache_to_the_reranker(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The hosted image prefetches both models into DOCQA_HF_CACHE."""
+    """The hosted image prefetches both models into DOCQA_HF_CACHE.
+
+    The reranker is loaded on the first retrieval, not at construction, so the
+    test asks the retriever to load it explicitly.
+    """
+    import asyncio
+
     from docqa.ingest.embedder import EmbedderChoice
     from docqa.rerank import RerankerChoice
 
@@ -400,6 +406,8 @@ def test_pg_retriever_passes_the_model_cache_to_the_reranker(
         return RerankerChoice(FakeReranker(), requested="fastembed", fallback_reason=None)
 
     monkeypatch.setenv("DOCQA_HF_CACHE", str(tmp_path))
+    monkeypatch.delenv("DOCQA_RERANK_BATCH_SIZE", raising=False)
+    monkeypatch.delenv("DOCQA_ONNX_MEMORY_ARENA", raising=False)
     monkeypatch.setattr(
         "docqa.api.build_embedder",
         lambda settings: EmbedderChoice(
@@ -410,9 +418,13 @@ def test_pg_retriever_passes_the_model_cache_to_the_reranker(
     monkeypatch.setattr("docqa.api.make_engine", lambda settings: object())
     monkeypatch.setattr("docqa.api.make_session_factory", lambda engine: object())
 
-    PgRetriever(get_settings())
+    retriever = PgRetriever(get_settings())
+    assert captured == {}
+    asyncio.run(retriever._ensure_reranker())
 
     assert captured["cache_dir"] == str(tmp_path)
+    assert captured["batch_size"] == 1
+    assert captured["memory_arena"] is False
 
 
 def test_api_cors_uses_the_configured_ui_origin(

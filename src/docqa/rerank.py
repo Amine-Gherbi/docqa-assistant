@@ -1,11 +1,11 @@
 """Reranking behind one async interface.
 
-The intended backend is the ``Xenova/ms-marco-MiniLM-L-6-v2`` cross-encoder
-(Apache-2.0, ONNX, CPU). fastembed 0.9.0 — the version pinned here — exposes no
-cross-encoder class, so on this machine :func:`build_reranker` falls back to a
-deterministic lexical-overlap scorer. The fallback is never silent: it is named
-``dummy:lexical-overlap``, reported by the ablation harness, and recorded in
-``docs/ENV.md``.
+The backend is the ``Xenova/ms-marco-MiniLM-L-6-v2`` cross-encoder
+(Apache-2.0, ONNX, CPU) through fastembed's ``TextCrossEncoder``. When the
+weights or the ONNX runtime are unavailable, :func:`build_reranker` falls back
+to a deterministic lexical-overlap scorer in ``auto`` mode. The fallback is
+never silent: it is named ``dummy:lexical-overlap``, reported by the ablation
+harness, and recorded in ``docs/ENV.md``.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import re
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import anyio
 
@@ -110,14 +110,34 @@ class CrossEncoderReranker:
     """Xenova/ms-marco-MiniLM-L-6-v2 through fastembed's ONNX runtime."""
 
     def __init__(
-        self, model_name: str, cache_dir: str | None = None, threads: int | None = None
+        self,
+        model_name: str,
+        cache_dir: str | None = None,
+        threads: int | None = None,
+        batch_size: int = 1,
+        memory_arena: bool = False,
     ) -> None:
-        """Load the cross-encoder; raises when this fastembed build cannot."""
+        """Load the cross-encoder; raises when this fastembed build cannot.
+
+        ``batch_size`` bounds how many query-passage pairs ONNX pads and scores
+        at once. The cross-encoder pads every pair to the batch's longest input,
+        so a large batch allocates ``batch x heads x tokens x tokens`` floats for
+        attention. On a 512 MB instance a batch of 20 measured +439 MB RSS;
+        scoring one pair at a time measured +31 MB with identical scores.
+        ``memory_arena=False`` returns ONNX's working buffers after each call
+        instead of retaining them, which fastembed exposes only here.
+        """
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
+        if batch_size < 1:
+            raise ValueError("rerank batch size must be at least 1")
         self.name = f"fastembed:{model_name}"
         self.is_dummy = False
-        kwargs: dict[str, object] = {"model_name": model_name}
+        self._batch_size = batch_size
+        kwargs: dict[str, Any] = {
+            "model_name": model_name,
+            "enable_cpu_mem_arena": memory_arena,
+        }
         if cache_dir is not None:
             kwargs["cache_dir"] = cache_dir
         if threads is not None:
@@ -125,7 +145,12 @@ class CrossEncoderReranker:
         self._model = TextCrossEncoder(**kwargs)
 
     def _score_sync(self, query: str, passages: list[str]) -> list[float]:
-        scores = [float(value) for value in self._model.rerank(query, passages)]
+        scores = [
+            float(value)
+            for value in self._model.rerank(
+                query, passages, batch_size=self._batch_size
+            )
+        ]
         if not all(math.isfinite(value) for value in scores):
             raise ValueError("reranker produced a non-finite score")
         return scores
@@ -146,6 +171,8 @@ def build_reranker(
     model_name: str = DEFAULT_RERANK_MODEL,
     cache_dir: str | None = None,
     threads: int | None = None,
+    batch_size: int = 1,
+    memory_arena: bool = False,
 ) -> RerankerChoice:
     """Select the configured reranker, falling back only in ``auto``."""
     if mode not in {"auto", "fastembed", "lexical"}:
@@ -153,7 +180,13 @@ def build_reranker(
     if mode == "lexical":
         return RerankerChoice(LexicalOverlapReranker(), requested=mode, fallback_reason=None)
     try:
-        reranker = CrossEncoderReranker(model_name, cache_dir, threads=threads)
+        reranker = CrossEncoderReranker(
+            model_name,
+            cache_dir,
+            threads=threads,
+            batch_size=batch_size,
+            memory_arena=memory_arena,
+        )
     except Exception as exc:  # Import, download and ONNX failures differ widely.
         if mode == "fastembed":
             raise

@@ -244,6 +244,8 @@ def main() -> int:
         model_name=os.environ.get("DOCQA_RERANK_MODEL", DEFAULT_RERANK_MODEL),
         cache_dir=str(settings.hf_cache_dir) if settings.hf_cache_dir else None,
         threads=settings.onnx_threads,
+        batch_size=settings.rerank_batch_size,
+        memory_arena=settings.onnx_memory_arena,
     )
     print(reranker_choice.banner)
     if reranker_choice.fallback_reason:

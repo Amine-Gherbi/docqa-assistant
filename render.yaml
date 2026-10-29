@@ -39,6 +39,18 @@ services:
         value: fastembed
       - key: DOCQA_STRUCTURED_OUTPUT
         value: tool
+      # 512 MB free instance: one ONNX thread, one rerank pair at a time, and
+      # no CPU memory arena. See docs/ENV.md and the OOM measurement in
+      # docs/PROOF.md.
+      - key: DOCQA_ONNX_THREADS
+        value: "1"
+      - key: DOCQA_RERANK_BATCH_SIZE
+        value: "1"
+      - key: DOCQA_ONNX_MEMORY_ARENA
+        value: "0"
+      # Two concurrent cross-encoder calls pushed the process over 512 MB.
+      - key: DOCQA_ONNX_CONCURRENCY
+        value: "1"
 
   - type: web
     name: marginalia-ui
