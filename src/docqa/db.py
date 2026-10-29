@@ -9,6 +9,7 @@ Two tables matter for R1:
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date, datetime
@@ -27,12 +28,13 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import TSVECTOR
+from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -62,7 +64,10 @@ class Document(Base):
     """A PDF pinned by SHA-256 in ``corpus.lock.json``."""
 
     __tablename__ = "documents"
-    __table_args__ = (UniqueConstraint("sha256", name="uq_documents_sha256"),)
+    __table_args__ = (
+        UniqueConstraint("sha256", name="uq_documents_sha256"),
+        Index("ix_documents_collection_id", "collection_id"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     doc_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
@@ -77,6 +82,9 @@ class Document(Base):
     byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     page_count: Mapped[int] = mapped_column(Integer, nullable=False)
     embedder: Mapped[str] = mapped_column(Text, nullable=False)
+    collection_id: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="demo"
+    )
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -100,6 +108,7 @@ class Chunk(Base):
         ),
         Index("ix_chunks_document_id", "document_id"),
         Index("ix_chunks_page_no", "document_id", "page_no"),
+        Index("ix_chunks_collection_id", "collection_id"),
         Index(
             "ix_chunks_embedding_hnsw",
             "embedding",
@@ -121,6 +130,9 @@ class Chunk(Base):
     breadcrumb: Mapped[str] = mapped_column(Text, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     token_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    collection_id: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="demo"
+    )
     embedding: Mapped[Any] = mapped_column(Vector(EMBEDDING_DIM), nullable=False)
     tsv: Mapped[Any] = mapped_column(
         TSVECTOR,
@@ -129,6 +141,82 @@ class Chunk(Base):
     )
 
     document: Mapped[Document] = relationship(back_populates="chunks")
+
+
+class Upload(Base):
+    """A visitor PDF held in Postgres until its 24-hour TTL expires."""
+
+    __tablename__ = "uploads"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','parsing','embedding','ready','failed')",
+            name="ck_uploads_status",
+        ),
+        CheckConstraint("byte_size > 0", name="ck_uploads_size"),
+        CheckConstraint("pages_done >= 0", name="ck_uploads_pages_done"),
+        Index("ix_uploads_client_created", "client_id", "created_at"),
+        Index("ix_uploads_expires_at", "expires_at"),
+        Index("ix_uploads_status", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    client_id: Mapped[str] = mapped_column(Text, nullable=False)
+    filename: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(Text, nullable=False)
+    byte_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    collection_id: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    document_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+    )
+    pages_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    pages_done: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    parse_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    embed_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error_detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    data: Mapped[bytes] = mapped_column("bytea", LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+    pages: Mapped[list[UploadPage]] = relationship(
+        back_populates="upload",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class UploadPage(Base):
+    """One page's exact PyMuPDF text, owned by an upload."""
+
+    __tablename__ = "upload_pages"
+    __table_args__ = (
+        UniqueConstraint("upload_id", "page_no", name="uq_upload_pages_upload_page"),
+        CheckConstraint("page_no >= 1", name="ck_upload_pages_page_no"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    upload_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("uploads.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    page_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    page_text_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    upload: Mapped[Upload] = relationship(back_populates="pages")
 
 
 def make_engine(settings: Settings) -> AsyncEngine:
