@@ -12,7 +12,7 @@ the hosted pair on Render and Neon. The hosted services read the variables in
 | Database | PostgreSQL 16.13 at `localhost:5433`, database `docqa` |
 | Extension | pgvector 0.8.7, native Windows build (`CREATE EXTENSION vector`) |
 | DSN | `postgresql+asyncpg://postgres@localhost:5433/docqa` |
-| Schema | Alembic revision `0001_initial` (`uv run alembic upgrade head`; `docqa ingest` also applies it) |
+| Schema | Alembic revision `0003_collection_sha` (`uv run alembic upgrade head`; `docqa ingest` also applies it) |
 | PDF parser | PyMuPDF **2.0** (pinned exactly in `pyproject.toml`) |
 | Embedding | fastembed `BAAI/bge-small-en-v1.5`, 384-d, ONNX Runtime, CPU |
 | Reranking | fastembed `Xenova/ms-marco-MiniLM-L-6-v2` (Apache-2.0), ONNX Runtime, CPU |
@@ -29,7 +29,7 @@ the hosted pair on Render and Neon. The hosted services read the variables in
 |---|---|
 | API | <https://marginalia-api-4pvl.onrender.com> (`/health`, `/ready`, `/ask`) |
 | UI | <https://marginalia-ui.onrender.com> |
-| Render services | `marginalia-api` (`srv-dbho7udg1s2s73aj3kd0`), `marginalia-ui` (`srv-dbho81dg1s2s73aj3rlg`); branch `w2-b-hosting` |
+| Render services | `marginalia-api` (`srv-dbho7udg1s2s73aj3kd0`), `marginalia-ui` (`srv-dbho81dg1s2s73aj3rlg`); deployed from `w2-c-pdf-upload` by `commitId` through the Render API (`autoDeploy: no`) |
 | Plan | free: one 512 MB, 0.1-CPU API container; static UI; scale-to-zero after 15 minutes idle |
 | Database | Neon PostgreSQL 16 + pgvector, database `docqa`, 5 documents / 260 chunks |
 
@@ -43,13 +43,17 @@ uv run docqa ingest data/corpus/*.pdf
 ```
 
 `GET /ready` returns 503 until the database reports the expected 5 documents,
-260 chunks and the `0001_initial` revision.
+260 chunks and the `0003_collection_sha` revision. The upload tables from
+`0002_uploads`/`0003_collection_sha` are required by `/session`, `/documents`
+and `?collection=` on `/ask`.
 
 ### Variables the hosted services read
 
 | variable | hosted value | meaning |
 |---|---|---|
 | `DOCQA_DATABASE_URL` | secret (`sync: false`) | Neon URL. `postgresql://…?sslmode=require` is normalised to `postgresql+asyncpg://…?ssl=require`; `channel_binding` is dropped because asyncpg rejects it. |
+| `DOCQA_COOKIE_SECRET` | secret (`sync: false`), 64 hex chars | Signs the opaque visitor cookie. Without it the process mints a fresh secret at boot, so every restart or scale-to-zero wake invalidates every visitor session. |
+| `DOCQA_COOKIE_SECURE` | `1` | Forces the cookie's `Secure` attribute behind the TLS proxy; `SameSite=None` follows. |
 | `DOCQA_MODEL_API_KEY` | secret (`sync: false`) | Bearer token for the Gemini API; runtime only, never in the image. |
 | `DOCQA_MODEL_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | OpenAI-compatible endpoint. |
 | `DOCQA_MODEL_NAME` | `gemini-flash-lite-latest` | Primary generator id. |

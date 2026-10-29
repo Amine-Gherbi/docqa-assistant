@@ -14,7 +14,7 @@ services:
     runtime: docker
     plan: free
     region: frankfurt
-    branch: w2-b-hosting
+    branch: w2-c-pdf-upload
     dockerfilePath: ./Dockerfile
     dockerContext: .
     healthCheckPath: /health
@@ -61,7 +61,7 @@ services:
   - type: web
     name: marginalia-ui
     runtime: static
-    branch: w2-b-hosting
+    branch: w2-c-pdf-upload
     buildCommand: cd ui && npm ci && npm run build
     staticPublishPath: ui/dist
     autoDeploy: false

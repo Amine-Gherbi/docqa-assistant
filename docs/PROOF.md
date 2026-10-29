@@ -32,9 +32,10 @@ PostgreSQL 16 + pgvector 0.8.7 on port 5433, ONNX Runtime on CPU.
 | 18 | The submitted screenshots are four 1440x900 CSS-px shots at 2x DPR in WebP, with seeded data | `uv run python scripts/capture-assets` | `[assets-mirror] valid: 4 WebP at 2880x1800`; manifest has `previewCommand` and no `demo` block | verified |
 | 19 | Lint, strict types and tests pass; k6 is opt-in | `bash scripts/verify.sh` | ruff, `mypy --strict`, 147 tests pass; prints `SKIP k6`; final line `verify: PASS` | verified (k6 skipped) |
 | 20 | The UI builds | `npm --prefix ui run build` | `tsc -b && vite build` exits 0 | verified |
-| 21 | The hosted UI and API are live, and the hosted database holds the locked corpus | `curl -sS https://marginalia-api-4pvl.onrender.com/ready`; `curl -sS -o /dev/null -w '%{http_code}\n' https://marginalia-ui.onrender.com/` | `/ready` 200 with `documents: 5`, `chunks: 260`, `expected_documents: 5`, migration `0001_initial`; UI 200 | verified |
+| 21 | The hosted UI and API are live, and the hosted database holds the locked corpus and the upload schema | `curl -sS https://marginalia-api-4pvl.onrender.com/ready`; `curl -sS -o /dev/null -w '%{http_code}\n' https://marginalia-ui.onrender.com/` | `/ready` 200 with `documents: 5`, `chunks: 260`, `expected_documents: 5`, migration `0003_collection_sha`; UI 200 | verified |
 | 22 | The k6 concurrency scenario is green | `DOCQA_WITH_K6=1 bash scripts/verify.sh` | k6 p95 under the configured budget | **unverified** — k6 is not installed on this machine, so `verify.sh` prints `SKIP k6` |
 | 23 | Generation is non-streaming: the API returns one validated JSON response and has no SSE route | `grep -rn "StreamingResponse\|text/event-stream" src/docqa` | no matches; `src/docqa/api.py:4` states the response is non-streaming | verified |
+| 24 | A visitor PDF is limited to 25 MB and 80 pages, refused with 413/415/422, isolated per client, and deleted with its vectors after 24 hours. The page states: *Uploaded text is sent to a third-party model on a free tier. The provider may use it to improve its products. Do not upload confidential documents.* | see **Visitor uploads** below | hosted refusals 413/415/422/422 with the bodies quoted; `202 → ready` in 9.4 s through the hosted UI; answer cites page 3; second client 404; sweep `5 chunks / 5 vectors → 0`; disclosure and button both measured at 11px | verified |
 
 ## Eval gates, current keyed run
 
@@ -72,12 +73,12 @@ calibrated low-score refusal, keeps the citation validator, records
 |---|---|
 | API | <https://marginalia-api-4pvl.onrender.com> |
 | UI | <https://marginalia-ui.onrender.com> |
-| Render API service | `marginalia-api` (`srv-dbho7udg1s2s73aj3kd0`), live deploy `dep-dbhoumvlk1mc73dah260` at `df50ee85` |
-| Render UI service | `marginalia-ui` (`srv-dbho81dg1s2s73aj3rlg`), live deploy `dep-dbhoun0n74is73elb3n0` at `df50ee85` |
-| Deployed branch | `w2-b-hosting` |
+| Render API service | `marginalia-api` (`srv-dbho7udg1s2s73aj3kd0`), live deploy `dep-dbhq71vf3r2c73di2prg` at `b35b3bb` |
+| Render UI service | `marginalia-ui` (`srv-dbho81dg1s2s73aj3rlg`), live deploy `dep-dbhprljbc2fs73f3o2pg` at `cfc2f22` |
+| Deployed commit | `w2-c-pdf-upload`; both deploys were triggered through the Render API with `commitId` and `autoDeploy: no` |
 | Plan | Render free: one 512 MB, 0.1-CPU API container, static UI, scale-to-zero after 15 minutes idle |
 | Database | Neon PostgreSQL 16 + pgvector, database `docqa` |
-| Corpus | 5 documents / 260 chunks; migration `0001_initial` |
+| Corpus | 5 documents / 260 chunks; migration `0003_collection_sha` |
 
 The corpus PDFs are fetched and SHA-256-checked at image build
 (`Dockerfile`: `RUN uv run python scripts/fetch-corpus && uv run docqa ingest --check`).
@@ -101,15 +102,15 @@ curl -sS https://marginalia-api-4pvl.onrender.com/health
 
 curl -sS https://marginalia-api-4pvl.onrender.com/ready
 # 200; {"status":"ok","database":{"status":"ok","documents":5,"chunks":260},
-#       "migration":{"current":"0001_initial","head":"0001_initial","ok":true},
+#       "migration":{"current":"0003_collection_sha","head":"0003_collection_sha","ok":true},
 #       "corpus":{"documents":5,"chunks":260,"expected_documents":5,"ok":true}}
 
 curl -sS -o /dev/null -w '%{http_code}\n' https://marginalia-ui.onrender.com/
 # 200
 
 curl -sS https://marginalia-ui.onrender.com/ | grep -o '/assets/[^"]*\.js'
-# /assets/index-Dxcar6HP.js
-curl -sS https://marginalia-ui.onrender.com/assets/index-Dxcar6HP.js \
+# /assets/index-DBbXFlHr.js
+curl -sS https://marginalia-ui.onrender.com/assets/index-DBbXFlHr.js \
   | grep -o 'https://marginalia-api-4pvl.onrender.com/'
 # https://marginalia-api-4pvl.onrender.com/
 ```
@@ -120,11 +121,11 @@ operator secrets file:
 ```sh
 curl -sS -H "Authorization: Bearer $RENDER_API_KEY" \
   "https://api.render.com/v1/services/srv-dbho7udg1s2s73aj3kd0/deploys?limit=1"
-# dep-dbhoumvlk1mc73dah260 | live | commit df50ee85
+# dep-dbhq71vf3r2c73di2prg | live | commit b35b3bb
 
 curl -sS -H "Authorization: Bearer $RENDER_API_KEY" \
   "https://api.render.com/v1/services/srv-dbho81dg1s2s73aj3rlg/deploys?limit=1"
-# dep-dbhoun0n74is73elb3n0 | live | commit df50ee85
+# dep-dbhprljbc2fs73f3o2pg | live | commit cfc2f22
 ```
 
 ### `/ask` transcript
@@ -178,6 +179,112 @@ PGPORT=5432 psql -Atc \
   "$DOCQA_DATABASE_URL"
 # t
 ```
+
+### Visitor uploads (W2-c2)
+
+The upload surface was proved against the hosted pair after deploying commit
+`b35b3bb` (API) and `cfc2f22` (UI). The database needed the upload migrations,
+which are an operator step on the free plan:
+
+```sh
+# DOCQA_DATABASE_URL from P:/portfolio/.secrets/host.env
+uv run alembic upgrade head
+# 0001_initial -> 0002_uploads -> 0003_collection_sha
+curl -sS https://marginalia-api-4pvl.onrender.com/ready
+# 200; migration current=head=0003_collection_sha, documents 5, chunks 260
+```
+
+`GET /session` sets an HttpOnly `docqa_client` cookie (30-day `Max-Age`,
+`SameSite=None; Secure`) and returns a client id. A `POST /documents` without
+that cookie answers `401 {"detail":"start a session first"}`. With a cookie the
+route is present: `GET /documents` answers `405`, an empty multipart POST
+answers `422` for the missing `file`, and neither is a 404.
+
+The Render service did not have `DOCQA_COOKIE_SECRET`, so the app minted a
+per-process secret at boot and every restart invalidated every visitor cookie.
+A 64-hex secret was set through the Render API (never printed or committed),
+with `DOCQA_COOKIE_SECURE=1`; the service and UI branches were then pointed at
+`w2-c-pdf-upload`. Proof of persistence: a cookie minted before an API restart
+answered `GET /session` after the restart with the same `client_id` and
+`new:false`.
+
+**The disclosure.** Immediately above the drop zone, at the button's type size
+(measured `11px` for both `.upload-disclosure` and `.primary` in the deployed
+bundle):
+
+> **Uploaded text is sent to a third-party model on a free tier. The provider
+> may use it to improve its products. Do not upload confidential documents.**
+> Uploaded documents are deleted after 24 hours.
+
+The same sentence is in `README.md` under **Visitor uploads**. No page claims
+that uploads are private, secure or encrypted.
+
+**Refusals, hosted.** Fixtures were built locally (PyMuPDF for the PDFs, `dd`
+for the byte size) and posted with the session cookie.
+
+| fixture | HTTP | body |
+|---|---|---|
+| 27,263,812-byte file starting `%PDF-` | **413** | `{"state":"rejected","code":"too_large","detail":"The PDF is larger than 26214400 bytes.","limit":26214400}` |
+| text file, no `%PDF-` | **415** | `{"state":"rejected","code":"not_pdf","detail":"The file does not start with %PDF-; only PDF files are accepted.","limit":null}` |
+| 81-page PDF | **422** | `{"state":"rejected","code":"page_limit","detail":"The PDF has 81 pages; the limit is 80 pages.","limit":80}` |
+| AES-256 PDF, user password set | **422** | `{"state":"rejected","code":"encrypted","detail":"The PDF is password-protected, so its text cannot be read.","limit":null}` |
+
+The last case also fixed a real gap: PyMuPDF writes the security handler inline
+(`/Encrypt<<...>>`) rather than as `/Encrypt 6 0 R`, so the pre-parse check
+missed it and the file was accepted (`202`) and failed only in the worker. The
+check now matches both forms (`src/docqa/uploads/limits.py`), with tests for
+each form and for a real PyMuPDF-encrypted document.
+
+**Hosted upload and cited answer.** A 5-page generated PDF was uploaded through
+the hosted page in a fresh headless-Chromium context:
+
+| field | value |
+|---|---|
+| `GET /session` | 200 |
+| `POST /documents` | 202, `status=queued` |
+| poll `GET /documents/{id}` | 200, `parsing` → `embedding` → `ready` |
+| time to `ready` | 9.4 s (202 at 0.48 s; direct API poll saw ready at 5 s) |
+| `POST /ask` with `collection=u_b62f…` | 200 in 5.1 s |
+| claim | `The Meridian trial reported a 31 percent reduction in recovery time compared with usual care.` |
+| citation | `chunk_id=263`, `doc_id=upload:u_b62f…`, `page_no=3`, chars 0–155 |
+| quote | `31 percent reduction in recovery time` |
+| quote check | normalised substring of the stored chunk **and** of the stored page text; `page_text_sha256` matches |
+| reader | page badge **PAGE 3**, `passage-marker` present, `CSS.highlights` has `docqa-citation` |
+| URL after ready | `/?document=<upload id>` |
+
+The same run in the hosted UI reported `stage: "five-pages.pdf · Ready"` and
+11.4 s from page load to the rendered cited answer. Screenshot:
+`_orchestration/evidence/W2-c2/hosted-ui-ready.png`.
+
+**Isolation.** A second `GET /session` minted a different client id. With that
+cookie, `GET /documents/{first-id}` → `404 {"detail":"unknown document"}`,
+`GET /documents/{first-id}/pages/3` → `404 {"detail":"unknown page"}`,
+`GET /documents/{first-id}/file` → `404 {"detail":"unknown document"}`, and
+`POST /ask` with the first collection → `404 {"detail":"unknown collection"}`.
+Without any cookie the same reads answer `401`. The owning cookie reads the
+page (`200`, exact stored text) and the original PDF (`200`,
+`application/pdf`, 3,732 bytes).
+
+**TTL sweep.** The ready upload's `expires_at` was moved five minutes into the
+past, and the in-app sweep loop (60 s) removed it. Counts came from the hosted
+Neon database:
+
+| object | before | after |
+|---|---:|---:|
+| upload row | 1 (`ready`) | 0 (`upload=gone`) |
+| stored pages | 5 | 0 |
+| documents | 1 | 0 |
+| chunks | 5 | 0 |
+| chunks with a non-null embedding (vectors) | 5 | 0 |
+
+**Page budget on the 512 MB instance.** An 80-page, 74,650-byte PDF (~200 words
+per page) uploaded to the hosted API reached `ready` in **78 s**, under the
+worker's 90 s timeout, with `pages_done=80/80`; `/health` stayed 200 throughout
+and the instance did not restart. Embedding ran page by page at roughly one
+second per page. The UI therefore states the measured cap: **80 pages**. The
+margin is narrow (78 s of 90 s), so a denser 80-page file can still time out and
+is reported as `failed` with `error_code=timeout`; the upload does not crash
+the instance.
 
 ### 512 MB fix, measured
 
