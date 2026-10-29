@@ -109,16 +109,20 @@ class LexicalOverlapReranker:
 class CrossEncoderReranker:
     """Xenova/ms-marco-MiniLM-L-6-v2 through fastembed's ONNX runtime."""
 
-    def __init__(self, model_name: str, cache_dir: str | None = None) -> None:
+    def __init__(
+        self, model_name: str, cache_dir: str | None = None, threads: int | None = None
+    ) -> None:
         """Load the cross-encoder; raises when this fastembed build cannot."""
         from fastembed.rerank.cross_encoder import TextCrossEncoder
 
         self.name = f"fastembed:{model_name}"
         self.is_dummy = False
+        kwargs: dict[str, object] = {"model_name": model_name}
         if cache_dir is not None:
-            self._model = TextCrossEncoder(model_name=model_name, cache_dir=cache_dir)
-        else:
-            self._model = TextCrossEncoder(model_name=model_name)
+            kwargs["cache_dir"] = cache_dir
+        if threads is not None:
+            kwargs["threads"] = threads
+        self._model = TextCrossEncoder(**kwargs)
 
     def _score_sync(self, query: str, passages: list[str]) -> list[float]:
         scores = [float(value) for value in self._model.rerank(query, passages)]
@@ -141,6 +145,7 @@ def build_reranker(
     mode: str = "auto",
     model_name: str = DEFAULT_RERANK_MODEL,
     cache_dir: str | None = None,
+    threads: int | None = None,
 ) -> RerankerChoice:
     """Select the configured reranker, falling back only in ``auto``."""
     if mode not in {"auto", "fastembed", "lexical"}:
@@ -148,7 +153,7 @@ def build_reranker(
     if mode == "lexical":
         return RerankerChoice(LexicalOverlapReranker(), requested=mode, fallback_reason=None)
     try:
-        reranker = CrossEncoderReranker(model_name, cache_dir)
+        reranker = CrossEncoderReranker(model_name, cache_dir, threads=threads)
     except Exception as exc:  # Import, download and ONNX failures differ widely.
         if mode == "fastembed":
             raise

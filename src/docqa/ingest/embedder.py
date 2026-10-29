@@ -51,7 +51,9 @@ class Embedder(Protocol):
 class FastEmbedEmbedder:
     """bge-small-en-v1.5 through fastembed's ONNX runtime."""
 
-    def __init__(self, model_name: str, cache_dir: str | None = None) -> None:
+    def __init__(
+        self, model_name: str, cache_dir: str | None = None, threads: int | None = None
+    ) -> None:
         """Load the ONNX model and bind its tokenizer for counting."""
         from fastembed import TextEmbedding
 
@@ -61,6 +63,8 @@ class FastEmbedEmbedder:
         kwargs: dict[str, Any] = {"model_name": model_name}
         if cache_dir is not None:
             kwargs["cache_dir"] = cache_dir
+        if threads is not None:
+            kwargs["threads"] = threads
         self._model = TextEmbedding(**kwargs)
         inner = cast(Any, self._model).model
         self.counter: TokenCounter = ModelTokenCounter(inner.tokenizer)
@@ -168,6 +172,7 @@ def build_embedder(settings: Settings) -> EmbedderChoice:
         fastembedder = FastEmbedEmbedder(
             settings.embedding_model,
             str(settings.hf_cache_dir) if settings.hf_cache_dir else None,
+            threads=settings.onnx_threads,
         )
     except Exception as exc:  # Download and ONNX failures are heterogeneous.
         if mode == "fastembed":

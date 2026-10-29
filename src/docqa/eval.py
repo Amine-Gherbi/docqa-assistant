@@ -920,6 +920,7 @@ async def evaluate(
             if resolved_settings.hf_cache_dir
             else None
         ),
+        threads=resolved_settings.onnx_threads,
     )
     calibration = load_calibration(resolved_settings.calibration_path)
     model = build_model(resolved_settings)

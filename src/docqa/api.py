@@ -170,6 +170,7 @@ class PgRetriever:
         rerank_choice = build_reranker(
             mode=rerank_mode,
             cache_dir=str(settings.hf_cache_dir) if settings.hf_cache_dir else None,
+            threads=settings.onnx_threads,
         )
         self._reranker = rerank_choice.reranker
         LOGGER.info("%s", rerank_choice.banner)
