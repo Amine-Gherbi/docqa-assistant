@@ -19,7 +19,9 @@ TAIL_WINDOW = 256 * 1024
 
 _COUNT_RE = re.compile(rb"/Count\s+(\d+)")
 _PAGE_OBJECT_RE = re.compile(rb"/Type\s*/Page\b")
-_ENCRYPT_RE = re.compile(rb"/Encrypt\s+\d+\s+\d+\s+R")
+# Encrypted PDFs name the security handler either as an indirect reference
+# (`/Encrypt 6 0 R`) or inline (`/Encrypt<<...>>`), as PyMuPDF writes it.
+_ENCRYPT_RE = re.compile(rb"/Encrypt\s*(?:\d+\s+\d+\s+R|<<)")
 
 
 class UploadLimitError(Exception):
