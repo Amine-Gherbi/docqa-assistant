@@ -1,6 +1,6 @@
 # Retrieval ablation (R2)
 
-Recorded 2026-10-23 on the build machine (Windows 11, 12 logical CPUs, ONNX CPU).
+Recorded on the build machine (Windows 11, 12 logical CPUs, ONNX CPU).
 
 Corpus: the five pinned arXiv PDFs, **260 chunks**, real `BAAI/bge-small-en-v1.5`
 vectors (384-d) in PostgreSQL 16 + pgvector 0.8, HNSW cosine index plus a GIN

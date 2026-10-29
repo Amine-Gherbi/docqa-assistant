@@ -1,6 +1,8 @@
-# Local environment (P4)
+# Environments (P4)
 
-Recorded 2026-10-23 on the build machine. No Docker and no hosted service.
+Two environments: the build machine used for ingest, eval and the ablation, and
+the hosted pair on Render and Neon. The hosted services read the variables in
+"Hosted services"; the local defaults remain below.
 
 | component | value |
 |---|---|
@@ -10,18 +12,81 @@ Recorded 2026-10-23 on the build machine. No Docker and no hosted service.
 | Database | PostgreSQL 16.13 at `localhost:5433`, database `docqa` |
 | Extension | pgvector 0.8.7, native Windows build (`CREATE EXTENSION vector`) |
 | DSN | `postgresql+asyncpg://postgres@localhost:5433/docqa` |
-| Schema | Alembic revision `0001_initial` (`uv run docqa db upgrade`) |
+| Schema | Alembic revision `0001_initial` (`uv run alembic upgrade head`; `docqa ingest` also applies it) |
 | PDF parser | PyMuPDF **2.0** (pinned exactly in `pyproject.toml`) |
 | Embedding | fastembed `BAAI/bge-small-en-v1.5`, 384-d, ONNX Runtime, CPU |
 | Reranking | fastembed `Xenova/ms-marco-MiniLM-L-6-v2` (Apache-2.0), ONNX Runtime, CPU |
-| Answer API | `uv run docqa serve` on `127.0.0.1:8788` (CLI default); `GET /health`, `POST /ask`, `GET /eval/report` |
+| Answer API | `uv run docqa serve` on `127.0.0.1:8788` (CLI default); `GET /health`, `GET /ready`, `POST /ask`, `GET /eval/report` |
 | UI | `npm --prefix ui run dev` on `http://127.0.0.1:5173`; Vite proxies `/api` to `127.0.0.1:8788` |
-| Screenshots | four 2880x1800 WebP files captured at 1440x900 CSS px with deviceScaleFactor 2, re-captured 2026-10-24 before the daylight theme; not yet re-captured for it |
+| Screenshots | four 2880x1800 WebP files captured at 1440x900 CSS px with deviceScaleFactor 2, re-captured before the daylight theme; not yet re-captured for it |
 | UI theme | "daylight reading room": cool page `#f6f7f9`, white panels, navy citations `#2f4f8f`, warm paper document `#fffdf8` |
-| UI tests | `npm --prefix ui run e2e`: 4 Playwright tests pass — all three citations scroll and highlight, every recorded claim resolves with no render miss; `node ui/scripts/verify_demo_paper.mjs`: 9/9 demo claims resolve against the committed PDF, recorded 2026-10-23 |
-| Judge model | `claude-opus-5-5` pinned in `eval/judge.yaml`, different from the generator; reliability unverified |
+| UI tests | `npm --prefix ui run e2e`: 4 Playwright tests pass — all three citations scroll and highlight, every recorded claim resolves with no render miss; `node ui/scripts/verify_demo_paper.mjs`: 9/9 demo claims resolve against the committed PDF |
+| Judge model | `gemini-3.8-flash` pinned in `eval/judge.yaml`, different from the generator; reliability unverified |
 
-## Daylight reading-room palette and contrast (2026-10-24)
+## Hosted services
+
+| service | value |
+|---|---|
+| API | <https://marginalia-api-4pvl.onrender.com> (`/health`, `/ready`, `/ask`) |
+| UI | <https://marginalia-ui.onrender.com> |
+| Render services | `marginalia-api` (`srv-dbho7udg1s2s73aj3kd0`), `marginalia-ui` (`srv-dbho81dg1s2s73aj3rlg`); branch `w2-b-hosting` |
+| Plan | free: one 512 MB, 0.1-CPU API container; static UI; scale-to-zero after 15 minutes idle |
+| Database | Neon PostgreSQL 16 + pgvector, database `docqa`, 5 documents / 260 chunks |
+
+The free plan runs no pre-deploy command: `preDeployCommand` is ignored and the
+blueprint declares none. Schema and corpus are an operator step from a machine
+holding `DOCQA_DATABASE_URL`:
+
+```sh
+uv run alembic upgrade head          # or let `docqa ingest` apply it
+uv run docqa ingest data/corpus/*.pdf
+```
+
+`GET /ready` returns 503 until the database reports the expected 5 documents,
+260 chunks and the `0001_initial` revision.
+
+### Variables the hosted services read
+
+| variable | hosted value | meaning |
+|---|---|---|
+| `DOCQA_DATABASE_URL` | secret (`sync: false`) | Neon URL. `postgresql://…?sslmode=require` is normalised to `postgresql+asyncpg://…?ssl=require`; `channel_binding` is dropped because asyncpg rejects it. |
+| `DOCQA_MODEL_API_KEY` | secret (`sync: false`) | Bearer token for the Gemini API; runtime only, never in the image. |
+| `DOCQA_MODEL_BASE_URL` | `https://generativelanguage.googleapis.com/v1beta/openai` | OpenAI-compatible endpoint. |
+| `DOCQA_MODEL_NAME` | `gemini-flash-lite-latest` | Primary generator id. |
+| `DOCQA_MODEL_FALLBACK_NAMES` | `gemini-3.8-flash` | First retry; after it fails the call fails loudly. |
+| `DOCQA_MODEL_TIMEOUT_S` | `180` (default) | Per-request HTTP timeout. |
+| `DOCQA_MODEL_MIN_INTERVAL_S` | `20` (default) | Minimum seconds between request starts; one call in flight. |
+| `DOCQA_MODEL_MAX_RETRIES` | `2` (default) | Retries on 429/503/timeout before moving down the chain. |
+| `DOCQA_MODEL_RETRY_BACKOFF_S` | `5` (default) | Base backoff; 5 s then 10 s, or `Retry-After` if larger. |
+| `DOCQA_CORS_ORIGINS` | `https://marginalia-ui.onrender.com` | Browser origin allowed to call `/ask`; an unset value keeps the localhost origins. |
+| `DOCQA_EMBEDDER` | `fastembed` | Fail instead of falling back to the hash embedder. |
+| `DOCQA_RERANKER` | `fastembed` | Fail instead of falling back to lexical overlap. |
+| `DOCQA_STRUCTURED_OUTPUT` | `tool` | Force the recorded forced-`submit_answer` mode; do not trust a stale probe artifact. |
+| `DOCQA_ONNX_THREADS` | `1` | One ONNX thread; the default sizes arenas from the visible CPU count. |
+| `DOCQA_RERANK_BATCH_SIZE` | `1` | One cross-encoder pair per batch; a batch of 20 measured +439 MB. |
+| `DOCQA_ONNX_MEMORY_ARENA` | `0` | Do not keep ONNX CPU buffers alive after inference. |
+| `DOCQA_ONNX_CONCURRENCY` | `1` | One ONNX call at a time; two concurrent cross-encoder calls crossed 512 MB. |
+| `DOCQA_HF_CACHE` | `/app/.cache/fastembed` (image default) | Where the ONNX weights are baked into the image at build time. |
+| `PORT` | injected by Render | The image binds `${PORT:-8788}`; the blueprint does not set it. |
+
+The asyncpg pool is not an environment variable: `pool_size=2`,
+`max_overflow=2`, `pool_recycle=300` and `pool_pre_ping=True` are fixed in
+`src/docqa/db.py:52`. The default 5 + 10 pool would hold up to 15 connection
+buffers for a process that answers one question at a time.
+
+### What the free instance imposes
+
+- 512 MB RAM and 0.1 CPU for the API. The ONNX models stay resident; the
+  process-wide limiter is set to 1, so inference runs one call at a time.
+- Scale-to-zero after 15 minutes idle; the first request after that waits about
+  a minute. `GET /health` and `/ready` are the warm-up probes.
+- No pre-deploy command and no persistent disk. The ONNX weights are baked into
+  the image at build time; the corpus PDFs are fetched and hash-checked at
+  build time, while the database is external (Neon).
+- One instance, one uvicorn process. Ingest and eval are not served by the
+  hosted API; they run from the build machine with `DOCQA_DATABASE_URL` set.
+
+## Daylight reading-room palette and contrast
 
 The Marginalia UI uses the light "daylight reading room" identity: page
 `#f6f7f9`, panel `#ffffff`, raised panel `#eef1f5`, ink `#15181d`, muted
@@ -47,7 +112,7 @@ panel 7.03:1, and panel-coloured text on navy 7.97:1. The paper page is the
 only warm surface against the cool shell; its own 1 px rule keeps the page
 edge legible without a shadow.
 
-Source and trail type (2026-10-24): source titles are 13 px ink, page labels
+Source and trail type: source titles are 13 px ink, page labels
 11 px mono muted, snippets 12 px muted, and the trail summary 12.5 px muted.
 A selected source row sits on the 14% navy highlight, which composites to
 `#e2e6ef` over the panel.
@@ -68,8 +133,8 @@ against `clientHeight` 844 px (no scroll).
 ## Embedding path used: real model
 
 **This run used the real bge-small-en-v1.5 weights, not dummy embeddings.**
-Hugging Face was reachable, fastembed downloaded the ONNX artifacts on
-2026-10-23, and `uv run docqa ingest` printed:
+Hugging Face was reachable, fastembed downloaded the ONNX artifacts, and
+`uv run docqa ingest` printed:
 
 ```
 Embeddings: fastembed:BAAI/bge-small-en-v1.5 (384-d, ONNX CPU)
@@ -78,7 +143,8 @@ Embeddings: fastembed:BAAI/bge-small-en-v1.5 (384-d, ONNX CPU)
 The model cache lives under the fastembed default
 (`C:\Users\interview\AppData\Local\Temp\fastembed_cache` on this machine); set
 `DOCQA_HF_CACHE` to relocate it. Inference runs in
-`anyio.to_thread.run_sync` behind a process-wide `Semaphore(2)`, per invariant 7.
+`anyio.to_thread.run_sync` behind a process-wide semaphore (`Semaphore(2)` by
+default; `DOCQA_ONNX_CONCURRENCY=1` on the hosted free instance), per invariant 7.
 Vectors are L2-normalised before storage; the per-file `clipped-vector count`
 reports vectors that had to be renormalised (0 for every file here).
 
@@ -102,8 +168,8 @@ model-context guarantee.
 **The R2 ablation used the real `Xenova/ms-marco-MiniLM-L-6-v2` cross-encoder
 weights, not the dummy scorer.** fastembed 0.9.0 does not export a cross-encoder
 at the package top level, but the class exists at
-`fastembed.rerank.cross_encoder.TextCrossEncoder`; the weights downloaded on
-2026-10-23 and the harness printed:
+`fastembed.rerank.cross_encoder.TextCrossEncoder`; the weights downloaded and
+the harness printed:
 
 ```
 Reranker: fastembed:Xenova/ms-marco-MiniLM-L-6-v2 (ONNX CPU)
@@ -111,7 +177,7 @@ Reranker: fastembed:Xenova/ms-marco-MiniLM-L-6-v2 (ONNX CPU)
 
 The model cache is the same fastembed cache as the embedder (`DOCQA_HF_CACHE`
 relocates it). Reranking runs in `anyio.to_thread.run_sync` behind the same
-process-wide `Semaphore(2)` as embedding (`src/docqa/onnx.py`, invariant 7).
+process-wide semaphore as embedding (`src/docqa/onnx.py`, invariant 7).
 
 ### Dummy-reranker fallback
 
@@ -142,7 +208,7 @@ See `docs/ABLATION.md` for p50/p95.
 
 ```sh
 scripts/fetch-corpus
-uv run docqa db upgrade
+uv run alembic upgrade head
 uv run docqa ingest data/corpus/*.pdf
 uv run docqa verify
 uv run pytest
@@ -153,7 +219,7 @@ uv run python scripts/ablation.py
 
 ## Answer generation and structured output (R3, live endpoint)
 
-Recorded 2026-10-23. The answer path reads its endpoint only from the
+The answer path reads its endpoint only from the
 environment. No key is committed; `.env` is gitignored.
 
 | variable | default | meaning |
@@ -161,7 +227,7 @@ environment. No key is committed; `.env` is gitignored.
 | `DOCQA_MODEL_BASE_URL` | unset | OpenAI-compatible base URL; unset ⇒ extractive fallback |
 | `DOCQA_MODEL_API_KEY` | unset | bearer token for the keyed endpoint |
 | `DOCQA_JUDGE_API_KEY` | falls back to `DOCQA_MODEL_API_KEY` | bearer token for the judge probe |
-| `DOCQA_MODEL_NAME` | `claude-sonnet-5-5` | primary model id sent in the request body |
+| `DOCQA_MODEL_NAME` | `claude-sonnet-5-5` if unset | primary model id sent in the request body; `scripts/live.sh` and the hosted service set `gemini-flash-lite-latest` |
 | `DOCQA_MODEL_FALLBACK_NAMES` | unset | comma-separated retry ids tried in order after the primary fails |
 | `DOCQA_MODEL_TIMEOUT_S` | `180` | per-request HTTP timeout; a timeout is retried with backoff |
 | `DOCQA_MODEL_MIN_INTERVAL_S` | `20` | minimum seconds between request **starts** to one endpoint (one call in flight) |
@@ -201,35 +267,35 @@ reported one.
 
 ### Measured run cost and demo cache
 
-The 30-question production eval on 2026-10-23 took **778.6 s (12.98 min)** and
-made **26 model requests** with **0 retries and 0 rate-limit failures**. That
-wall clock is almost entirely the rate floor: 25 intervals × 31 s = 775 s. The
-gold-fitted threshold admits all 24 answerable questions plus U1 and U6, so 26
-calls are now needed; the forced diagnostic made 30 calls in 916.4 s
-(29 × 31 = 899 s floor). The budget is recorded in `eval-report.json` under
-`provenance.run`, with the earlier gate run in `eval-report-baseline.json` and
-the diagnostic in `eval-report-forced.json`.
+The 30-question keyed production eval took **710.3 s (11.84 min)** and made
+**26 model requests** with **0 retries, 0 rate-limit failures and 0 server
+errors**. The rate floor is 25 intervals × 20 s = 500 s; the remaining ~210 s is
+provider latency. The gold-fitted threshold admits all 24 answerable questions
+plus U1 and U6, so 26 calls are needed. The budget is recorded in
+`eval-report.json` under `run`, with the earlier keyless gate run in
+`eval-report-baseline.json` and the forced diagnostic in
+`eval-report-forced.json`.
 
 `bash scripts/live.sh warm` generated `data/demo-answers.json` with the six
 demo questions. Of those, T1 and R3 are validated answers; S3, D3 and R2 are
 `validation_failed` refusals (the model's quotes failed the citation contract);
 U5 is a `low_score` refusal. Each entry carries the exact question text, the
-model id `openai-compatible:openai-fast`, and a `generated_at` timestamp. The
-cache was generated before the gold calibration refit, so each cached response
-embeds the then-current calibration snapshot (threshold `0.2552`); that is
-historical metadata, not the threshold now loaded at boot. The API serves an
-exact-question hit with `cached: true` and
-`cache: {model, generated_at}`, and a miss calls the live endpoint, returning
-HTTP 429 `{"state": "rate_limited", …}` when the anonymous window is closed
-rather than a 500.
+model id recorded at generation time (the retired keyless model), and a
+`generated_at` timestamp. The cache predates the keyed migration and the gold
+calibration refit, so each cached response embeds the then-current calibration
+snapshot (threshold `0.2552`); that is historical metadata, not the threshold now
+loaded at boot. The API serves an exact-question hit with `cached: true` and
+`cache: {model, generated_at}`, and a miss calls the live keyed endpoint. If the
+provider still rate-limits after the documented retries, the API returns HTTP
+429 `{"state": "rate_limited", …}` rather than a 500.
 
 ### Probe verdict (keyed endpoint)
 
-`bash scripts/live.sh probe --json` against the keyed endpoint:
+`bash scripts/live.sh probe --json` against the keyed endpoint (the artifact
+also records its own `checked_at`; abridged here):
 
 ```json
 {
-  "checked_at": "2026-10-29T14:52:58.958034+00:00",
   "detail": "gateway returned the forced submit_answer call",
   "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai",
   "json_mode_ok": null,
@@ -277,7 +343,7 @@ Newton-Raphson and picks the balanced-accuracy-optimal threshold. Commit
 `eval/calibration_fit_set.json` along with it; the loader validates the hash's
 shape at boot, and `tests/test_refusal.py` recomputes it from the fit set.
 
-Current fit (2026-10-23), `gold-human-v1`: the 30 hand-authored gold questions
+Current fit, `gold-human-v1`: the 30 hand-authored gold questions
 (24 answerable, 6 unanswerable), one observation each, real
 `Xenova/ms-marco-MiniLM-L-6-v2`:
 
@@ -317,10 +383,10 @@ validation still applies) and sets `"uncalibrated": true` plus
 bash scripts/live.sh probe --json   # real request; records the mode
 bash scripts/live.sh ask --question "…"
 bash scripts/live.sh warm           # six demo answers → data/demo-answers.json
-bash scripts/live.sh eval           # 30 questions; 778.6 s measured; ~31 s between calls
+bash scripts/live.sh eval           # 30 questions; 710.3 s measured; 20 s between calls
 bash scripts/live.sh eval --force-generation  # diagnostic: bypass low_score, exit 0
 
-uv run docqa serve --port 8788            # POST /ask, GET /health, GET /eval/report
+uv run docqa serve --port 8788            # POST /ask, GET /health, GET /ready, GET /eval/report
 uv run docqa serve --uncalibrated         # explicit, recorded in responses
 uv run python scripts/fit_calibration_gold.py   # refit on the human gold set (local DB)
 uv run python scripts/fit_calibration.py        # provisional synthetic fit; overwrites the artifact
@@ -341,7 +407,7 @@ The k6 step is **opt-in** (`DOCQA_WITH_K6=1`) because a loopback latency gate in
 whatever else the machine is doing: two runs on this host measured p95 7.92 s and 9.22 s
 for the same code, the second while a Playwright suite was running. A gate that fails
 because another test was running is not a gate. The default `verify` is deterministic
-(lint, types, 107 tests); the load number is measured on demand and quoted with its date.
+(lint, types, 147 tests); the load number is measured on demand and quoted with its budget.
 
 That is a measured CPU limitation, not a passing grade: the 5 s gate is crossed locally,
 and it stays crossed until inference has a GPU or a smaller model.
