@@ -913,7 +913,14 @@ async def evaluate(
     )
     questions = load_gold(gold_path)
     choice = build_embedder(resolved_settings)
-    reranker_choice = build_reranker(mode=os.environ.get("DOCQA_RERANKER", "auto"))
+    reranker_choice = build_reranker(
+        mode=os.environ.get("DOCQA_RERANKER", "auto"),
+        cache_dir=(
+            str(resolved_settings.hf_cache_dir)
+            if resolved_settings.hf_cache_dir
+            else None
+        ),
+    )
     calibration = load_calibration(resolved_settings.calibration_path)
     model = build_model(resolved_settings)
     judge_status = await _judge_status(resolved_settings, len(questions))

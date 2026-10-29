@@ -7,10 +7,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres@localhost:5433/docqa"
+DEFAULT_CORS_ORIGINS = ("http://localhost:5173", "http://127.0.0.1:5173")
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 DEFAULT_MODEL_NAME = "claude-sonnet-5-5"
 DEFAULT_MODEL_TIMEOUT_S = 180.0
@@ -53,6 +55,7 @@ class Settings:
     structured_output_probe_path: Path = DEFAULT_STRUCTURED_OUTPUT_PROBE
     structured_output_source: str = "default"
     demo_answers_path: Path = DEFAULT_DEMO_ANSWERS_PATH
+    cors_origins: tuple[str, ...] = DEFAULT_CORS_ORIGINS
     # Diagnostic only: bypasses the calibrated low-score refusal so the model's
     # own answer rate can be measured. Never use it for a gate run.
     force_generation: bool = False
@@ -132,6 +135,62 @@ def normalise_base_url(url: str | None) -> str | None:
     return url.rstrip("/") if url else None
 
 
+def normalise_database_url(url: str) -> str:
+    """Convert a libpq/Neon URL into a SQLAlchemy asyncpg URL.
+
+    Neon hands out ``postgresql://…?sslmode=require&channel_binding=require``.
+    SQLAlchemy's asyncpg dialect forwards query parameters as ``asyncpg.connect``
+    keyword arguments, where libpq-only names such as ``sslmode`` and
+    ``channel_binding`` are rejected. Map ``sslmode`` to asyncpg's ``ssl`` and
+    drop the channel-binding hint, which asyncpg does not implement.
+    """
+    parts = urlsplit(url)
+    scheme = parts.scheme
+    if scheme in {"postgres", "postgresql"}:
+        scheme = "postgresql+asyncpg"
+    pairs = parse_qsl(parts.query, keep_blank_values=True)
+    has_ssl = any(key == "ssl" for key, _ in pairs)
+    forwarded: list[tuple[str, str]] = []
+    for key, value in pairs:
+        if key == "channel_binding":
+            continue
+        if key == "sslmode":
+            if not has_ssl:
+                forwarded.append(("ssl", value))
+            continue
+        if key == "connect_timeout":
+            forwarded.append(("timeout", value))
+            continue
+        forwarded.append((key, value))
+    return urlunsplit(
+        (scheme, parts.netloc, parts.path, urlencode(forwarded), parts.fragment)
+    )
+
+
+def cors_origins_from_environment(raw: str | None) -> tuple[str, ...]:
+    """Parse ``DOCQA_CORS_ORIGINS`` as explicit browser origins.
+
+    Origins are stripped of whitespace and a trailing slash, because the browser
+    sends neither. An unset or empty value keeps the local development origins.
+    """
+    if raw is None:
+        return DEFAULT_CORS_ORIGINS
+    origins = tuple(
+        origin.strip().rstrip("/") for origin in raw.split(",") if origin.strip()
+    )
+    return origins or DEFAULT_CORS_ORIGINS
+
+
+def alembic_database_url(default: str) -> str:
+    """Resolve the URL used by a bare ``alembic`` invocation.
+
+    The hosted release step runs ``alembic upgrade head`` before the API boots,
+    so the environment must win over the local URL committed in ``alembic.ini``.
+    """
+    raw = os.environ.get("DOCQA_DATABASE_URL")
+    return normalise_database_url(raw) if raw else default
+
+
 def resolve_structured_output(
     probe_path: Path, base_url: str | None, model_name: str
 ) -> tuple[StructuredOutputMode, str]:
@@ -194,7 +253,9 @@ def get_settings() -> Settings:
     if backoff < 0:
         raise ValueError("DOCQA_MODEL_RETRY_BACKOFF_S must not be negative")
     return Settings(
-        database_url=os.environ.get("DOCQA_DATABASE_URL", DEFAULT_DATABASE_URL),
+        database_url=normalise_database_url(
+            os.environ.get("DOCQA_DATABASE_URL", DEFAULT_DATABASE_URL)
+        ),
         corpus_lock=Path(
             os.environ.get("DOCQA_CORPUS_LOCK", str(PROJECT_ROOT / "corpus.lock.json"))
         ),
@@ -223,6 +284,9 @@ def get_settings() -> Settings:
         structured_output_source=structured_source,
         demo_answers_path=Path(
             os.environ.get("DOCQA_DEMO_ANSWERS", str(DEFAULT_DEMO_ANSWERS_PATH))
+        ),
+        cors_origins=cors_origins_from_environment(
+            os.environ.get("DOCQA_CORS_ORIGINS")
         ),
         force_generation=_boolean_from_environment("DOCQA_FORCE_GENERATION"),
     )

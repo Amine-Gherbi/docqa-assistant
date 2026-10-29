@@ -10,9 +10,17 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from docqa.config import alembic_database_url
 from docqa.db import Base
 
 config = context.config
+
+# The hosted release step runs a bare `alembic upgrade head`; the service
+# environment must win over the localhost URL committed in alembic.ini.
+config.set_main_option(
+    "sqlalchemy.url",
+    alembic_database_url(config.get_main_option("sqlalchemy.url") or ""),
+)
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --port 5173",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && node scripts/check-demo-guard.mjs",
     "preview": "vite preview --port 5174",
     "lint": "eslint .",
     "typecheck": "tsc -b --pretty false",
