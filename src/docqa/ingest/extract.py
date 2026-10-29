@@ -18,6 +18,10 @@ import pymupdf
 PINNED_PYMUPDF_VERSION = "2.0"
 
 
+class EncryptedPdfError(ValueError):
+    """The document needs a password before any text can be read."""
+
+
 def sha256_bytes(data: bytes) -> str:
     """Return the lowercase hex SHA-256 of ``data``."""
     return hashlib.sha256(data).hexdigest()
@@ -60,23 +64,34 @@ class ExtractedPdf:
 
 def extract_pdf(path: Path) -> ExtractedPdf:
     """Extract every page's text using the pinned PyMuPDF text mode."""
-    raw = path.read_bytes()
+    return extract_pdf_bytes(path.read_bytes(), str(path))
+
+
+def extract_pdf_bytes(raw: bytes, label: str = "<upload>") -> ExtractedPdf:
+    """Extract a PDF held in memory, with the same pinned offsets as a file.
+
+    Visitor uploads are stored as ``bytea`` and parsed from those bytes, so the
+    citation offsets index exactly the string this function returns. An
+    encrypted document is refused before any page is read.
+    """
     version = str(pymupdf.__version__)
     if version != PINNED_PYMUPDF_VERSION:
         raise RuntimeError(
             f"PyMuPDF {version} is not the pinned {PINNED_PYMUPDF_VERSION}; "
             "character offsets would not be reproducible"
         )
-    document = pymupdf.open(path)  # type: ignore[no-untyped-call]
+    document = pymupdf.open(stream=raw, filetype="pdf")  # type: ignore[no-untyped-call]
     try:
         if not document.is_pdf:
-            raise ValueError(f"{path} is not a PDF")
+            raise ValueError(f"{label} is not a PDF")
+        if document.needs_pass:
+            raise EncryptedPdfError(f"{label} is password-protected")
         pages: list[Page] = []
         for index, page in enumerate(cast(Any, document), start=1):
             text = str(page.get_text("text", sort=True))
             pages.append(Page(page_no=index, text=text, sha256=sha256_text(text)))
         return ExtractedPdf(
-            path=path,
+            path=Path(label),
             sha256=sha256_bytes(raw),
             byte_size=len(raw),
             page_count=document.page_count,
