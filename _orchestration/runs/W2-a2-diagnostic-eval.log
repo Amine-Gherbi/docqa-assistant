@@ -1,0 +1,47 @@
+judge probe gemini-3.8-flash attempt 1 failed (ReadTimeout: ); retrying in 5.0s
+judge probe gemini-3.8-flash attempt 2 failed (ReadTimeout: ); retrying in 10.0s
+HTTP 503 from https://generativelanguage.googleapis.com/v1beta/openai; retry 1/2 in 5.0s
+HTTP 503 from https://generativelanguage.googleapis.com/v1beta/openai; retry 1/2 in 5.0s
+HTTP 503 from https://generativelanguage.googleapis.com/v1beta/openai; retry 1/2 in 5.0s
+HTTP 503 from https://generativelanguage.googleapis.com/v1beta/openai; retry 1/2 in 5.0s
+dropped claim reason=quote_mismatch citation_ids=['309'] text="BERT's training data generator chooses 15% of the token positions at random for prediction."
+dropped claim reason=quote_mismatch citation_ids=['306'] text='BERT-Large (BERTLARGE) has 24 layers (L=24) and a hidden size (hidden units) of 1024 (H=1024).'
+dropped claim reason=quote_mismatch citation_ids=['313'] text="2,500M words from English Wikipedia were used in BERT's pre-training corpus."
+dropped claim reason=quote_mismatch citation_ids=['347'] text='BERT-Base pre-training used 16 TPU chips in total.'
+dropped claim reason=quote_mismatch citation_ids=['385'] text='Sentence-BERT is trained on NLI data using the classification objective function.'
+dropped claim reason=quote_mismatch citation_ids=['363'] text='Sentence-BERT takes about 5 seconds to compute 10,000 sentence embeddings.'
+HTTP 503 from https://generativelanguage.googleapis.com/v1beta/openai; retry 1/2 in 5.0s
+dropped claim reason=bad_quote citation_ids=['368'] text='Sentence-BERT experiments with three pooling strategies: using the CLS-token output, computing the mean of all output ve'
+dropped claim reason=quote_mismatch citation_ids=['409'] text='DPR defines the similarity between a question and a passage using the dot product of their respective vectors, computed '
+dropped claim reason=quote_mismatch citation_ids=['410'] text='DPR chooses the simpler inner product function as its similarity function.'
+dropped claim reason=quote_mismatch citation_ids=['418'] text='In its main experiments, DPR used a training batch size of 128 and one additional BM25 negative passage per question.'
+dropped claim reason=quote_mismatch citation_ids=['423'] text="DPR's in-batch negative scheme reuses the negative examples already present in the batch rather than creating new ones."
+HTTP 503 from https://generativelanguage.googleapis.com/v1beta/openai; retry 1/2 in 5.0s
+dropped claim reason=bad_quote citation_ids=['461'] text='The RAG-Sequence model uses the same retrieved document to generate the complete sequence, treating it as a single laten'
+dropped claim reason=bad_quote citation_ids=['514'] text="RAG's document index for all of Wikipedia requires approximately 100 GB of CPU memory, which can be reduced to 36 GB usi"
+dropped claim reason=quote_mismatch citation_ids=['411'] text='The best model uses gold passages from the same mini-batch and one BM25 negative passage.'
+Questions: 30 (24 answerable, 6 unanswerable)
+Retrieval recall (answerable questions):
+  vector-only top-8        17/24 (70.8%) [50.8%, 85.1%]
+  +lexical/RRF top-8       17/24 (70.8%) [50.8%, 85.1%]
+  +rerank top-8            18/24 (75.0%) [55.1%, 88.0%]
+Answer path (production: hybrid_rerank top-8; generator: openai-compatible:gemini-flash-lite-latest (retry gemini-3.8-flash)):
+Wall clock: 973.4 s (16.22 min); questions measured: 30; model calls: {'requests': 32, 'retries': 6, 'rate_limited': 0, 'server_errors': 6, 'timeouts': 0}
+  answer rate (answerable)                     9/24 (37.5%) [21.2%, 57.3%]
+  refusal rate (unanswerable)                  6/6 (100.0%) [61.0%, 100.0%]
+  citation precision (rule-based, not a model judge) 9/9 (100.0%) [70.1%, 100.0%]
+  faithfulness (rule-based, not a model judge) 8/9 (88.9%) [56.5%, 98.0%]
+Stage failures: retrieval=5, fusion=0, rerank=1, generation=0, schema=9
+Stage failure reasons: bad_quote=1, gold_chunk_absent=6, quote_mismatch=8
+Structured modes: tool=26
+Gates:
+  PASS retrieval_recall_at_8      18/24 (75.0%) [55.1%, 88.0%] threshold 75%
+  FAIL answer_rate_answerable     9/24 (37.5%) [21.2%, 57.3%] threshold 50%
+  PASS unanswerable_refusal_rate  6/6 (100.0%) [61.0%, 100.0%] threshold 80%
+  PASS citation_precision         9/9 (100.0%) [70.1%, 100.0%] threshold 80%
+  PASS faithfulness               8/9 (88.9%) [56.5%, 98.0%] threshold 80%
+Result: 1 gate(s) failed
+Report: P:\portfolio\docqa-assistant\eval-report.json
+GATE FAILURE: exit 6; see P:\portfolio\docqa-assistant\eval-report.json
+EXIT=6
+2026-10-29T16:09:12Z

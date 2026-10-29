@@ -26,7 +26,7 @@ import os
 import time
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -92,7 +92,14 @@ RETRIEVAL_ABLATION: tuple[tuple[str, RetrievalMode], ...] = (
     ("+rerank top-8", "hybrid_rerank"),
 )
 
-STAGES: tuple[str, ...] = ("retrieval", "fusion", "rerank", "generation", "schema")
+STAGES: tuple[str, ...] = (
+    "retrieval",
+    "fusion",
+    "rerank",
+    "generation",
+    "schema",
+    "validation",
+)
 RULE_BASED_LABEL = "rule-based, not a model judge"
 
 
@@ -382,6 +389,10 @@ class QuestionOutcome:
     error: str | None
     model_requested: str | None = None
     model_answered: str | None = None
+    # The mode that produced the final payload, and the concrete measured
+    # reason when ``stage_failed`` is not null.
+    structured_mode: str | None = None
+    failure: dict[str, object] | None = None
 
     def as_dict(self) -> dict[str, object]:
         """JSON-safe row."""
@@ -398,6 +409,7 @@ def attribute_stage(
     in_fusion: bool,
     refused: bool,
     refused_for_schema: bool,
+    refused_for_validation: bool,
     has_claims: bool,
 ) -> str | None:
     """Name the earliest stage that lost the gold span or the answer.
@@ -418,6 +430,10 @@ def attribute_stage(
     if not answerable:
         return None if refused else "generation"
     if refused:
+        # A claim dropped by the citation contract is not a schema failure;
+        # keep the two causes separate so the counts mean what they say.
+        if refused_for_validation:
+            return "validation"
         return "schema" if refused_for_schema else "generation"
     return None if has_claims else "generation"
 
@@ -442,6 +458,7 @@ def _build_outcome(
     latency_ms: float,
     requested_model: str | None = None,
     error: str | None = None,
+    model_failure: dict[str, object] | None = None,
 ) -> QuestionOutcome:
     context_ids = {chunk.chunk_id for chunk in retrieval.chunks}
     gold_id = gold.chunk_id if gold is not None else None
@@ -465,6 +482,7 @@ def _build_outcome(
         probability = None
         model_requested = requested_model
         model_answered = None
+        structured_mode: str | None = None
     else:
         refused = response.insufficient_evidence
         answered = not refused and bool(response.claims)
@@ -492,11 +510,18 @@ def _build_outcome(
         probability = response.refusal_probability
         model_requested = response.model_requested or requested_model
         model_answered = response.model_answered
+        structured_mode = response.structured_mode
 
+    refused_for_validation = bool(
+        response is not None
+        and response.reason == "validation_failed"
+        and response.validation.claims_dropped > 0
+    )
     refused_for_schema = bool(
         response is not None
         and response.reason == "validation_failed"
-        and (schema_failures > 0 or response.validation.claims_dropped > 0)
+        and not refused_for_validation
+        and schema_failures > 0
     )
     trace = retrieval.trace
     stage = attribute_stage(
@@ -508,9 +533,18 @@ def _build_outcome(
         in_fusion=gold_id in {hit.chunk_id for hit in trace.fusion_hits},
         refused=refused,
         refused_for_schema=refused_for_schema,
+        refused_for_validation=refused_for_validation,
         has_claims=answered,
     )
     top_score = retrieval.chunks[0].rerank_score if retrieval.chunks else None
+    failure = _stage_failure(
+        stage=stage,
+        response=response,
+        model_failure=model_failure,
+        gold_id=gold_id,
+        gold_rank=gold_rank,
+        in_context=in_context,
+    )
     gold_payload: dict[str, object] | None = None
     if gold is not None:
         gold_payload = {
@@ -544,7 +578,59 @@ def _build_outcome(
         error=error,
         model_requested=model_requested,
         model_answered=model_answered,
+        structured_mode=structured_mode,
+        failure=failure,
     )
+
+
+def _stage_failure(
+    *,
+    stage: str | None,
+    response: AnswerResponse | None,
+    model_failure: dict[str, object] | None,
+    gold_id: int | None,
+    gold_rank: int | None,
+    in_context: bool,
+) -> dict[str, object] | None:
+    """Record a measured reason for every stage that failed.
+
+    Retrieval/fusion/rerank losses are structural (the gold chunk is absent);
+    generation and schema losses carry the wire and validation diagnostics from
+    :class:`~docqa.answer.FailureDetail` rather than a bare ``error: null``.
+    """
+    if stage is None:
+        return None
+    if stage in {"retrieval", "fusion", "rerank"}:
+        structural: dict[str, object] = {
+            "stage": stage,
+            "reason": "gold_chunk_absent",
+            "gold_chunk_id": gold_id,
+            "gold_rank": gold_rank,
+            "in_context": in_context,
+        }
+        return structural
+    if stage in {"schema", "validation"}:
+        failure: dict[str, object] = (
+            dict(response.failure.as_dict())
+            if response is not None and response.failure is not None
+            else {"reason": f"{stage}_failure_unrecorded"}
+        )
+        failure["stage"] = stage
+        return failure
+    if response is None:
+        failure = (
+            dict(model_failure)
+            if model_failure is not None
+            else {"reason": "model_call_error"}
+        )
+        failure["stage"] = stage
+        return failure
+    generation: dict[str, object] = {
+        "stage": stage,
+        "reason": response.reason or "no_claims",
+        "model_reason": response.model_reason,
+    }
+    return generation
 
 
 # --------------------------------------------------------------------------- #
@@ -562,6 +648,8 @@ class Aggregate:
     citation_precision: Rate
     faithfulness: Rate
     stage_counts: dict[str, int]
+    structured_mode_counts: dict[str, int] = field(default_factory=dict)
+    failure_reason_counts: dict[str, int] = field(default_factory=dict)
 
     def as_dict(self, *, k: int = 8) -> dict[str, object]:
         """JSON-safe aggregate block."""
@@ -578,6 +666,8 @@ class Aggregate:
                 "kind": RULE_BASED_LABEL,
             },
             "stage_failed_counts": dict(self.stage_counts),
+            "structured_mode_counts": dict(self.structured_mode_counts),
+            "stage_failure_reasons": dict(self.failure_reason_counts),
         }
 
 
@@ -603,6 +693,20 @@ def aggregate(outcomes: Sequence[QuestionOutcome]) -> Aggregate:
         ),
         stage_counts={stage: 0 for stage in STAGES}
         | dict(Counter(row.stage_failed for row in outcomes if row.stage_failed is not None)),
+        structured_mode_counts=dict(
+            Counter(
+                row.structured_mode
+                for row in outcomes
+                if row.structured_mode is not None
+            )
+        ),
+        failure_reason_counts=dict(
+            Counter(
+                str(row.failure.get("reason"))
+                for row in outcomes
+                if row.failure is not None and row.failure.get("reason")
+            )
+        ),
     )
 
 
@@ -867,6 +971,7 @@ async def evaluate(
                     reranker=reranker_choice.reranker,
                 )
                 error: str | None = None
+                model_failure: dict[str, object] | None = None
                 response: AnswerResponse | None
                 try:
                     response = await _answer(
@@ -879,6 +984,9 @@ async def evaluate(
                 except RateLimitedError as exc:
                     response = None
                     error = str(exc)
+                    model_failure = (
+                        exc.failure.as_dict() if exc.failure is not None else None
+                    )
                     rate_limit_failures += 1
                     if rate_limit_failures >= 3:
                         blocked_reason = (
@@ -888,6 +996,9 @@ async def evaluate(
                 except ModelCallError as exc:
                     response = None
                     error = str(exc)
+                    model_failure = (
+                        exc.failure.as_dict() if exc.failure is not None else None
+                    )
                 else:
                     rate_limit_failures = 0
                 elapsed_ms = (datetime.now(UTC) - started).total_seconds() * 1000.0
@@ -903,6 +1014,7 @@ async def evaluate(
                             model, "requested_model", resolved_settings.model_name
                         ),
                         error=error,
+                        model_failure=model_failure,
                     )
                 )
                 if blocked_reason is not None:
@@ -1085,6 +1197,22 @@ def render(report: EvalReport) -> str:
         "Stage failures: "
         + ", ".join(f"{stage}={stage_counts.get(stage, 0)}" for stage in STAGES)
     )
+    failure_reasons = cast(dict[str, int], metrics.get("stage_failure_reasons", {}))
+    if failure_reasons:
+        lines.append(
+            "Stage failure reasons: "
+            + ", ".join(
+                f"{reason}={count}" for reason, count in sorted(failure_reasons.items())
+            )
+        )
+    mode_counts = cast(dict[str, int], metrics.get("structured_mode_counts", {}))
+    if mode_counts:
+        lines.append(
+            "Structured modes: "
+            + ", ".join(
+                f"{mode}={count}" for mode, count in sorted(mode_counts.items())
+            )
+        )
     lines.append("Gates:" if gate_run else "Gates (diagnostic only):")
     for gate in report.gates:
         state = "PASS" if gate.passed else "FAIL"

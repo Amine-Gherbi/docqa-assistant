@@ -107,6 +107,7 @@ def test_attribute_stage_names_the_earliest_loss() -> None:
             "in_fusion": True,
             "refused": False,
             "refused_for_schema": False,
+            "refused_for_validation": False,
             "has_claims": True,
         }
         values.update(overrides)
@@ -119,5 +120,10 @@ def test_attribute_stage_names_the_earliest_loss() -> None:
     assert stage(in_context=False) == "rerank"
     assert stage(refused=True) == "generation"
     assert stage(refused=True, refused_for_schema=True) == "schema"
+    assert stage(refused=True, refused_for_validation=True) == "validation"
+    assert (
+        stage(refused=True, refused_for_schema=True, refused_for_validation=True)
+        == "validation"
+    )
     assert stage(answerable=False, refused=True) is None
     assert stage(answerable=False, refused=False) == "generation"

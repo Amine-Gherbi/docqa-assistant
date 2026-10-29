@@ -123,8 +123,39 @@ class CalibrationUnavailable(CalibrationError):
     """No calibration file exists and the caller did not allow an uncalibrated boot."""
 
 
+@dataclass(frozen=True)
+class ModelFailure:
+    """Wire-level diagnostics for a reply that produced no usable payload."""
+
+    structured_mode: str | None
+    http_status: int | None
+    finish_reason: str | None
+    parse_errors: tuple[str, ...]
+    response_excerpt: str
+    raw_text_excerpt: str
+
+    def as_dict(self) -> dict[str, object]:
+        """JSON-safe record for the eval report."""
+        return {
+            "reason": "model_call_error",
+            "structured_mode": self.structured_mode,
+            "http_status": self.http_status,
+            "finish_reason": self.finish_reason,
+            "parse_errors": list(self.parse_errors),
+            "response_excerpt": self.response_excerpt,
+            "raw_text_excerpt": self.raw_text_excerpt,
+        }
+
+
 class ModelCallError(RuntimeError):
     """The configured model endpoint could not be reached or returned no body."""
+
+    def __init__(
+        self, message: str, *, failure: ModelFailure | None = None
+    ) -> None:
+        """Carry the human-readable message and any wire-level diagnostics."""
+        super().__init__(message)
+        self.failure = failure
 
 
 class RateLimitedError(ModelCallError):
@@ -365,6 +396,61 @@ class ValidationReport:
 
 
 @dataclass(frozen=True)
+class FailureDetail:
+    """The concrete reason an attempt produced no displayable claim.
+
+    The eval report keeps this verbatim so a ``stage_failed`` row is never a
+    bare ``error: null``: the wire status, the provider's finish reason, the
+    schema/validation errors, and a bounded excerpt of the model output are
+    all recorded at the point the attempt failed.
+    """
+
+    structured_mode: str
+    http_status: int | None
+    finish_reason: str | None
+    parse_errors: tuple[str, ...]
+    response_excerpt: str
+    raw_text_excerpt: str
+    validation: ValidationReport
+
+    @property
+    def reason(self) -> str:
+        """Classify the failure so the report can count causes, not stages."""
+        if self.parse_errors:
+            return "schema_parse_error"
+        validation = self.validation
+        if validation.dropped_quote_mismatch:
+            return "quote_mismatch"
+        if validation.dropped_unknown_citation:
+            return "unknown_citation"
+        if validation.dropped_uncited:
+            return "uncited"
+        if validation.dropped_bad_quote:
+            return "bad_quote"
+        return "claim_validation_failed"
+
+    def as_dict(self) -> dict[str, object]:
+        """JSON-safe failure record; every field is measured, not inferred."""
+        return {
+            "reason": self.reason,
+            "structured_mode": self.structured_mode,
+            "http_status": self.http_status,
+            "finish_reason": self.finish_reason,
+            "parse_errors": list(self.parse_errors),
+            "response_excerpt": self.response_excerpt,
+            "raw_text_excerpt": self.raw_text_excerpt,
+            "claims_returned": self.validation.claims_returned,
+            "claims_kept": self.validation.claims_kept,
+            "dropped_uncited": self.validation.dropped_uncited,
+            "dropped_unknown_citation": self.validation.dropped_unknown_citation,
+            "dropped_quote_mismatch": self.validation.dropped_quote_mismatch,
+            "dropped_bad_quote": self.validation.dropped_bad_quote,
+            "schema_failures": self.validation.schema_failures,
+            "repair_turns": self.validation.repair_turns,
+        }
+
+
+@dataclass(frozen=True)
 class AnswerResponse:
     """The only shape the API returns; every claim here has passed validation."""
 
@@ -384,6 +470,11 @@ class AnswerResponse:
     # ``-latest`` alias moved or when the documented retry model answered.
     model_requested: str | None = None
     model_answered: str | None = None
+    # The mode that produced the final payload (``tool``, ``json``,
+    # ``json-fallback`` or ``extractive``), and the concrete failure reason
+    # when no claim was displayable.
+    structured_mode: str | None = None
+    failure: FailureDetail | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -628,6 +719,10 @@ class ModelRequest:
     chunks: tuple[RetrievedChunk, ...]
     repair_errors: tuple[str, ...] = ()
     previous_response: str = ""
+    # One-shot override for the structured-output mode. The answer path sets
+    # this to ``"json"`` for its single fallback attempt after a schema failure;
+    # ``None`` keeps the client's configured mode.
+    structured_output: Literal["tool", "json"] | None = None
 
 
 @dataclass(frozen=True)
@@ -642,6 +737,10 @@ class ModelReply:
     # not stable, so the eval records this next to the id it requested.
     model: str | None = None
     http_status: int | None = None
+    # Diagnostics copied into the eval report when an attempt fails.
+    structured_mode: Literal["tool", "json", "extractive"] | None = None
+    finish_reason: str | None = None
+    response_excerpt: str = ""
 
 
 @runtime_checkable
@@ -665,8 +764,15 @@ def build_prompts(question: str, chunks: Sequence[RetrievedChunk]) -> tuple[str,
         "1. Every claim must carry at least one passage id in citation_ids; "
         "ids are the integers in square brackets before each passage.\n"
         "2. quote must be copied character-for-character from every passage you "
-        "cite. Never paraphrase, repair or reformat a quote.\n"
-        f"3. A quote is at most {MAX_QUOTE_CHARS} characters; choose a contiguous span.\n"
+        "cite. Passages are raw PDF extraction, and two-column pages are "
+        "interleaved: one line may hold left-column text, a wide gap, then "
+        "right-column text, and a word may be hyphenated across a line break. "
+        "The quote must not contain a newline and must not cross the gap "
+        "between columns: pick a short contiguous fragment from one column of "
+        "one line. Do not reorder, skip or join text to make a quote read "
+        "naturally. Never paraphrase, repair or reformat a quote.\n"
+        f"3. A quote is at most {MAX_QUOTE_CHARS} characters; keep it well under "
+        "that limit.\n"
         "4. If the passages do not support an answer, return empty claims with "
         "insufficient_evidence=true and a short reason.\n"
         "5. Do not use outside knowledge. Do not make a claim you cannot quote."
@@ -759,6 +865,7 @@ class ExtractiveModel:
             payload=payload,
             raw_text=json.dumps(payload, sort_keys=True),
             via_tool_call=False,
+            structured_mode="extractive",
         )
 
 
@@ -923,12 +1030,13 @@ class OpenAICompatibleModel:
         return (self._model_name,)
 
     def _body(self, request: ModelRequest) -> dict[str, object]:
+        mode = request.structured_output or self.structured_output
         body: dict[str, object] = {
             "model": self._model_name,
             "messages": _repair_messages(request),
             "temperature": 0,
         }
-        if self.structured_output == "tool":
+        if mode == "tool":
             body["tools"] = [
                 {
                     "type": "function",
@@ -1113,7 +1221,12 @@ class OpenAICompatibleModel:
                 via_tool_call=False,
                 error=str(exc),
             )
-        return _reply_from_body(body, expect_tool=self.structured_output == "tool")
+        mode: Literal["tool", "json"] = (
+            "json"
+            if (request.structured_output or self.structured_output) == "json"
+            else "tool"
+        )
+        return _reply_from_body(body, expect_tool=mode == "tool", structured_mode=mode)
 
 
 class FailoverModel:
@@ -1193,29 +1306,96 @@ def _string(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _reply_from_body(body: object, *, expect_tool: bool) -> ModelReply:
+def _body_excerpt(body: object) -> str:
+    """Return a bounded, JSON-safe excerpt of the raw response body."""
+    try:
+        encoded = json.dumps(body, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):  # pragma: no cover - parsed JSON is serialisable.
+        encoded = repr(body)
+    return encoded[:200]
+
+
+def _reply_from_body(
+    body: object,
+    *,
+    expect_tool: bool,
+    structured_mode: Literal["tool", "json"] = "tool",
+) -> ModelReply:
     """Extract ``submit_answer`` arguments (or content JSON) from a chat response."""
+    excerpt = _body_excerpt(body)
     data = _as_dict(body)
     if data is None:
-        return ModelReply(None, "", False, "response body is not a JSON object")
+        return ModelReply(
+            None,
+            "",
+            False,
+            "response body is not a JSON object",
+            structured_mode=structured_mode,
+            response_excerpt=excerpt,
+        )
     reported_model = _string(data.get("model"))
     error_field = _string(data.get("error"))
     if error_field is not None:
-        return ModelReply(None, "", False, f"gateway error: {error_field}")
+        return ModelReply(
+            None,
+            "",
+            False,
+            f"gateway error: {error_field}",
+            model=reported_model,
+            structured_mode=structured_mode,
+            response_excerpt=excerpt,
+        )
     choices = _as_list(data.get("choices"))
     if not choices:
-        return ModelReply(None, "", False, "response has no choices")
+        return ModelReply(
+            None,
+            "",
+            False,
+            "response has no choices",
+            model=reported_model,
+            structured_mode=structured_mode,
+            response_excerpt=excerpt,
+        )
     first = _as_dict(choices[0])
-    message = _as_dict(first.get("message")) if first is not None else None
+    if first is None:
+        return ModelReply(
+            None,
+            "",
+            False,
+            "response choice is not an object",
+            model=reported_model,
+            structured_mode=structured_mode,
+            response_excerpt=excerpt,
+        )
+    finish_reason = _string(first.get("finish_reason"))
+    message = _as_dict(first.get("message"))
     if message is None:
-        return ModelReply(None, "", False, "response choice has no message")
+        return ModelReply(
+            None,
+            "",
+            False,
+            "response choice has no message",
+            model=reported_model,
+            structured_mode=structured_mode,
+            finish_reason=finish_reason,
+            response_excerpt=excerpt,
+        )
 
     tool_calls = _as_list(message.get("tool_calls"))
     if tool_calls:
         call = _as_dict(tool_calls[0])
         function = _as_dict(call.get("function")) if call is not None else None
         if function is None:
-            return ModelReply(None, "", False, "tool call has no function object")
+            return ModelReply(
+                None,
+                "",
+                False,
+                "tool call has no function object",
+                model=reported_model,
+                structured_mode=structured_mode,
+                finish_reason=finish_reason,
+                response_excerpt=excerpt,
+            )
         name = _string(function.get("name")) or ""
         arguments = function.get("arguments")
         raw = arguments if isinstance(arguments, str) else json.dumps(arguments)
@@ -1228,12 +1408,24 @@ def _reply_from_body(body: object, *, expect_tool: bool) -> ModelReply:
             error=error,
             model=reported_model,
             http_status=200,
+            structured_mode=structured_mode,
+            finish_reason=finish_reason,
+            response_excerpt=excerpt,
         )
 
     content = _string(message.get("content"))
     if content is None or not content.strip():
         expectation = "tool call" if expect_tool else "JSON content"
-        return ModelReply(None, "", False, f"response contained no {expectation}")
+        return ModelReply(
+            None,
+            "",
+            False,
+            f"response contained no {expectation}",
+            model=reported_model,
+            structured_mode=structured_mode,
+            finish_reason=finish_reason,
+            response_excerpt=excerpt,
+        )
     payload = parse_json_lenient(content)
     error = None if payload is not None else "message content was not valid JSON"
     return ModelReply(
@@ -1243,6 +1435,9 @@ def _reply_from_body(body: object, *, expect_tool: bool) -> ModelReply:
         error=error,
         model=reported_model,
         http_status=200,
+        structured_mode=structured_mode,
+        finish_reason=finish_reason,
+        response_excerpt=excerpt,
     )
 
 
@@ -1307,20 +1502,35 @@ async def answer_question(
     )
     reply = await _call(model, request)
     answered_model = reply.model
+    primary_mode = model.structured_output
+    structured_mode: str | None = reply.structured_mode or primary_mode
     raw, errors = _parse_reply(reply)
     schema_failures = 1 if errors else 0
     repair_turns = 0
+    last_reply = reply
 
     if errors:
         repair_turns = MAX_REPAIR_TURNS
+        # ADR 0004's sanctioned second attempt: when the primary was a forced
+        # tool call, retry exactly once as a JSON-only prompt. The fallback
+        # feeds the same schema and citation validation as the tool path.
+        fallback_mode: Literal["json"] | None = (
+            "json" if primary_mode == "tool" else None
+        )
         repair_request = dataclasses.replace(
             request,
             repair_errors=errors,
             previous_response=reply.raw_text,
+            structured_output=fallback_mode,
         )
-        reply = await _call(model, repair_request)
-        answered_model = reply.model
-        raw, errors = _parse_reply(reply)
+        last_reply = await _call(model, repair_request)
+        answered_model = last_reply.model
+        structured_mode = (
+            "json-fallback"
+            if fallback_mode == "json"
+            else (last_reply.structured_mode or primary_mode)
+        )
+        raw, errors = _parse_reply(last_reply)
         if errors:
             schema_failures = 2
             LOGGER.warning(
@@ -1329,18 +1539,21 @@ async def answer_question(
             )
 
     if raw is None:
+        validation = ValidationReport(
+            schema_failures=schema_failures, repair_turns=repair_turns
+        )
         return _refusal(
             "validation_failed",
             closest,
             model=model,
             info=info,
             probability=probability,
-            validation=ValidationReport(
-                schema_failures=schema_failures, repair_turns=repair_turns
-            ),
+            validation=validation,
             force_generation=force_generation,
             model_requested=requested_model,
             model_answered=answered_model,
+            structured_mode=structured_mode,
+            failure=_failure_detail(last_reply, errors, validation, structured_mode),
         )
 
     if raw.insufficient_evidence:
@@ -1359,6 +1572,7 @@ async def answer_question(
             force_generation=force_generation,
             model_requested=requested_model,
             model_answered=answered_model,
+            structured_mode=structured_mode,
         )
 
     kept, counts = validate_claims(raw.claims, context)
@@ -1383,6 +1597,8 @@ async def answer_question(
             force_generation=force_generation,
             model_requested=requested_model,
             model_answered=answered_model,
+            structured_mode=structured_mode,
+            failure=_failure_detail(last_reply, (), report, structured_mode),
         )
     return AnswerResponse(
         claims=tuple(kept),
@@ -1398,13 +1614,42 @@ async def answer_question(
         forced_generation=force_generation,
         model_requested=requested_model,
         model_answered=answered_model,
+        structured_mode=structured_mode,
+    )
+
+
+def _failure_detail(
+    reply: ModelReply,
+    errors: Sequence[str],
+    validation: ValidationReport,
+    structured_mode: str | None,
+) -> FailureDetail:
+    """Build the report record for an attempt that produced no displayable claim."""
+    return FailureDetail(
+        structured_mode=structured_mode or "unknown",
+        http_status=reply.http_status,
+        finish_reason=reply.finish_reason,
+        parse_errors=tuple(errors),
+        response_excerpt=reply.response_excerpt,
+        raw_text_excerpt=reply.raw_text[:200],
+        validation=validation,
     )
 
 
 async def _call(model: StructuredModel, request: ModelRequest) -> ModelReply:
     reply = await model.complete(request)
     if reply.error is not None:
-        raise ModelCallError(reply.error)
+        raise ModelCallError(
+            reply.error,
+            failure=ModelFailure(
+                structured_mode=reply.structured_mode or model.structured_output,
+                http_status=reply.http_status,
+                finish_reason=reply.finish_reason,
+                parse_errors=(reply.error,),
+                response_excerpt=reply.response_excerpt,
+                raw_text_excerpt=reply.raw_text[:200],
+            ),
+        )
     return reply
 
 
@@ -1439,6 +1684,8 @@ def _refusal(
     force_generation: bool = False,
     model_requested: str | None = None,
     model_answered: str | None = None,
+    structured_mode: str | None = None,
+    failure: FailureDetail | None = None,
 ) -> AnswerResponse:
     return AnswerResponse(
         claims=(),
@@ -1455,6 +1702,8 @@ def _refusal(
         forced_generation=force_generation,
         model_requested=model_requested,
         model_answered=model_answered,
+        structured_mode=structured_mode,
+        failure=failure,
     )
 
 

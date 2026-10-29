@@ -16,12 +16,13 @@ labels. The set is 30 rather than 100 because 100 spans could not be labelled
 honestly in one session; see `eval/README.md` for the reduction and the guard
 that enforces it.
 
-Generated 2026-10-23 on the build machine (Windows 11, ONNX CPU) against the
-real corpus: `fastembed:BAAI/bge-small-en-v1.5` embeddings and
-`fastembed:Xenova/ms-marco-MiniLM-L-6-v2` reranker. Generator: the live, keyless
-`openai-compatible:openai-fast` endpoint
-(`https://text.pollinations.ai/openai`), forced `submit_answer` tool call; the
-probe verdict is in `docs/ENV.md`. Calibration: `eval/calibration.json`,
+The run in "Three runs on 2026-10-23" was generated on that date on the build
+machine (Windows 11, ONNX CPU) against the real corpus:
+`fastembed:BAAI/bge-small-en-v1.5` embeddings and
+`fastembed:Xenova/ms-marco-MiniLM-L-6-v2` reranker. That historical run used
+the retired keyless `openai-compatible:openai-fast` endpoint
+(`https://text.pollinations.ai/openai`). The current keyed run is described in
+"Keyed run: the schema-stage cause". Calibration: `eval/calibration.json`,
 `gold-human-v1` (fitted on all 30 gold questions — see the in-sample caveat
 below), threshold `0.6361` on the probability scale (≈ −0.353 on the raw
 reranker score), fit-set `f1a55cdd…0479`.
@@ -34,16 +35,65 @@ bash scripts/live.sh eval --force-generation   # diagnostic only → eval-report
 bash scripts/live.sh eval --ablate vector-only  # weakened path → eval-report-ablation.json
 ```
 
-`scripts/live.sh` exports only the public endpoint and model id; it contains no
-secret. Without `DOCQA_MODEL_BASE_URL` the same harness uses the labelled
-extractive fallback (that is how the committed `eval-report-ablation.json` was
-produced in R2).
+`scripts/live.sh` parses `P:/portfolio/.secrets/model.env`, exports only
+`DOCQA_MODEL_API_KEY` / `DOCQA_JUDGE_API_KEY` and the endpoint settings, and
+refuses to run without a key; no value is echoed. Without a model endpoint the
+same harness uses the labelled extractive fallback (that is how the committed
+`eval-report-ablation.json` was produced in R2).
 
-The command exits **6** when any gate fails. It currently exits 6: **three of
-the five production gates fail** (answer rate, citation precision,
-faithfulness). The final production run took **778.6 s (12.98 min)** wall clock,
-measured 30 questions, and made **26 model requests with 0 retries and 0
-rate-limit failures**. The numbers are reported, not tuned away.
+The command exits **6** when any gate fails. The current keyed run exits **0**:
+all five production gates pass. It took **710.3 s (11.84 min)** wall clock,
+measured 30 questions, and made **26 model requests with 0 retries, 0
+rate-limit failures and 0 server errors**. The numbers are reported, not tuned
+away.
+
+## Keyed run: the schema-stage cause
+
+W2-a reported seven `schema` failures (B1, B3, B4, B5, D1, D2, R2). They were
+not schema failures. The instrumented run records, per failing question,
+`http_status`, `finish_reason`, `structured_mode`, the parse errors and
+bounded excerpts of the wire body; in that run all seven came back HTTP 200
+with `finish_reason: "tool_calls"`, `structured_mode: "tool"` and zero parse
+errors, so the forced `submit_answer` call was honoured and the JSON parsed.
+Six were `quote_mismatch` and one `bad_quote` (a quote over the 240-character
+cap); the claims died in the citation contract, not the schema. The eval now
+labels those two causes separately: `schema` means the payload failed the
+answer schema, `validation` means a parsed claim was dropped by the citation
+contract.
+
+The mismatches have one measured cause: the chunks are raw PyMuPDF extraction
+of two-column pages. A left-column line and a right-column line are stored on
+the same extracted line, and hyphenated words are split across line breaks, so
+a sentence quoted in natural reading order is not contiguous in the chunk.
+Concretely, the model returned `Training of BERTBASE was performed on 4\nCloud
+TPUs ...`, while the stored chunk inserts `Label = IsNext` between those two
+lines; it returned `setting (Section 3.2)` where the stored chunk contains
+`setting (sec- [70] tion 3.2)`. Telling the model that passages are interleaved
+extraction and that a quote must not contain a newline or cross the column gap
+recovered three of the original seven (B4, D1, R2) and both failures the
+instrumented run added (S3, D3); four (B1, B3, B5, D2) still return a quote
+that spans the gap. The ADR 0004 JSON-only fallback is implemented as exactly
+one retry after a schema parse failure, recorded as
+`structured_mode: "json-fallback"`, and it fires only on such a failure; it
+fired **zero** times here because there were no parse failures, so the lift is
+not a silent mode switch. Measured: the answer rate moved from 11/24 (45.8%)
+to 15/24 (62.5%) [42.7%, 78.8%], and all five gates pass; the interval's lower
+bound is below the 50% threshold, so the point estimate passes, not the whole
+interval. T2, a single generation-stage failure in W2-a, also answered; with
+one sample that movement is not separable from provider variance. The root
+cause is not eliminated: de-interleaving the columns requires a re-ingest that
+changes chunk text, retrieval and the gold chunk ids, which this card forbids.
+
+Every failing row now carries a `failure` object: `reason` (`schema_parse_error`,
+`quote_mismatch`, `bad_quote`, `unknown_citation`, `uncited`,
+`claim_validation_failed`, `gold_chunk_absent` or `model_call_error`), `stage`,
+`structured_mode`, `http_status`, `finish_reason`, `parse_errors`,
+`response_excerpt` and `raw_text_excerpt` (both capped at 200 characters),
+plus `claims_returned`, `claims_kept`, `dropped_uncited`,
+`dropped_unknown_citation`, `dropped_quote_mismatch`, `dropped_bad_quote`,
+`schema_failures` and `repair_turns`. `metrics.stage_failure_reasons` counts
+those reasons and `metrics.structured_mode_counts` counts the mode that
+produced each final payload (`tool`, `json`, `json-fallback`, `extractive`).
 
 ## Three runs on 2026-10-23
 
@@ -101,7 +151,7 @@ All rates carry a Wilson 95% interval and their denominator `n`.
 | unanswerable refusal rate | an unanswerable question returns `insufficient_evidence=true` |
 | citation precision (rule-based) | a citation is correct when it names the gold chunk |
 | faithfulness (rule-based) | every citation on a claim names the gold chunk and its verbatim quote contains, or is contained in, the gold quote |
-| `stage_failed` | earliest stage that lost the span/answer: `retrieval`, `fusion`, `rerank`, `generation`, `schema` |
+| `stage_failed` | earliest stage that lost the span/answer: `retrieval`, `fusion`, `rerank`, `generation`, `schema` (the model's payload failed the answer schema) or `validation` (a claim was dropped by the citation contract) |
 
 Rules are enforced per metric: retrieval recall ≥ 75%, answer rate ≥ 50%,
 unanswerable refusal ≥ 80%, citation precision ≥ 80%, faithfulness ≥ 80%. An
@@ -110,7 +160,8 @@ empty denominator fails a gate; a gate never passes vacuously.
 ## Ablation table
 
 Retrieval rows use the same 24 answerable questions. The answer rows come from
-run (c), the final production run; the forced row is a labelled diagnostic and
+the historical run (c) of 2026-10-23; the current keyed run's answer rows are in
+"Keyed run: the schema-stage cause". The forced row is a labelled diagnostic and
 is not a production result.
 
 | configuration | n | metric | result | 95% Wilson CI |
@@ -131,8 +182,10 @@ Stage attribution over all 30 questions in run (c): `retrieval=5`, `fusion=0`,
 S4, D4 and D5 (the gold chunk is absent from the reranked top-8); R4 is the
 single rerank loss — the gold chunk was not in context, yet the model answered
 with two citations to other chunks, which is why precision is 7/9 rather than
-8/8. The eleven schema failures are B1–B5, S3, D1–D3, R2 and R5: the model ran,
-but every claim it returned failed the citation contract. The `generation=0`
+8/8. The eleven rows labelled `schema` in that run were B1–B5, S3, D1–D3, R2
+and R5: the model ran, but every claim it returned failed the citation
+contract. They were citation-contract drops, not schema parse failures — the
+distinction the current report makes with `validation`. The `generation=0`
 count differs from run (a)'s `generation=13` because the refitted threshold no
 longer refuses answerable questions before generation; the refusals that remain
 in run (c) are four unanswerable questions at `low_score`.
@@ -158,25 +211,22 @@ because it is generator-independent and changes for that reason alone. The
 ablation artifact predates the gold refit, so its `refusal_threshold` field
 still records `0.2552`; no retrieval number depends on that field.
 
-## Reading the production result honestly
+## Reading the current keyed result honestly
 
 - **Retrieval passes at the threshold, barely.** 18/24 = 75.0% is exactly the
   gate. The interval reaches down to 55.1%, and the vector-only and hybrid rows
   are identical at n=24, so this set does not establish that RRF or rerank is
   reliably better. Rerank recovers one question (R4); fusion recovers none.
-- **The answer-rate gate fails, and the model — not the threshold — is now the
-  binding constraint.** The refitted calibration admits all 24 answerable
-  questions, and 8/24 (33.3%) still return a validated claim. The forced
-  diagnostic shows the same 8/24 without the threshold at all. The remaining
-  16 failures are 13 dropped citation-contract violations, 2 model-declared
-  `insufficient_context` replies, and 1 missing tool call, five of which had
-  already lost the gold chunk at retrieval.
-- **Citation precision and faithfulness now fail at 7/9 (77.8%).** The larger
-  answered set exposed a real defect the n=2 baseline could not see: R4's two
-  claims cite non-gold chunks. They pass the verbatim-quote contract (the quote
-  is a substring of the chunk it names) but do not answer the question from the
-  gold passage. The gate stays failed at 80%; it is not lowered. The interval is
-  wide ([45.3%, 93.7%]) because n=9.
+- **The answer-rate gate passes at 15/24 (62.5%, [42.7%, 78.8%]).** Nine
+  answerable questions do not answer: five lost the gold chunk at retrieval
+  (S1, S2, S4, D4, D5) and four returned a quote that spans the interleaved
+  columns (B1, B3, B5, D2). The interval's lower bound is below the 50%
+  threshold, so the point estimate passes, not the whole interval.
+- **Citation precision and faithfulness pass at 13/15 (86.7%) and 12/15
+  (80.0%).** Faithfulness sits exactly on the 80% gate and its interval reaches
+  down to 54.8%, so this is a point-estimate pass. R4's two claims still cite
+  non-gold chunks; they pass the verbatim-quote contract but do not answer the
+  question from the gold passage. The gate is not lowered.
 - **The refusal gate passes, but not because the calibration is perfect.** All
   six unanswerable questions are refused: U2–U5 at `low_score`, U1 with
   `insufficient_context`, U6 with `validation_failed`. The in-sample calibration

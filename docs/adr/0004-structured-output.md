@@ -40,11 +40,16 @@ payload shape, so the citation gate is exercised end to end without a model.
    removes `tools` and `tool_choice`, appends an instruction to return one JSON
    object, and parses `message.content` with `json-repair`. Both modes feed the
    *same* server-side validation, repair turn, and refusal path.
-4. **The fallback is a deployment switch, not an automatic downgrade.** The
-   service does not silently switch mid-request if a tool call is missing: the
-   missing call is a schema failure, which triggers the single repair turn and
-   then the refusal path. Silent mode changes would make the probe verdict
-   meaningless.
+4. **The fallback is one automatic retry, and only after a schema failure.**
+   When the primary tool attempt returns arguments that do not satisfy the
+   answer schema, the answer path retries exactly once with `tools` and
+   `tool_choice` removed and the JSON-only instruction appended, and records
+   `structured_mode: "json-fallback"` on the response and in the eval report.
+   A citation-contract failure (a quote that is not a normalised substring of
+   the cited chunk) is *not* a schema failure: it gets no mode switch and no
+   extra model call. The fallback feeds the same validation, repair-turn and
+   refusal path; a second schema failure refuses. Silent mid-success mode
+   changes are still forbidden, so the probe verdict keeps its meaning.
 
 ## Verification status
 

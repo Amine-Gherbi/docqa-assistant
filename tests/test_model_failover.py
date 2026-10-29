@@ -172,3 +172,73 @@ async def test_failover_fails_loudly_when_every_model_fails() -> None:
     message = str(raised.value)
     assert "gemini-flash-lite-latest" in message
     assert "gemini-3.8-flash" in message
+
+
+async def test_reply_records_finish_reason_mode_and_excerpt() -> None:
+    body = _tool_body()
+    choices = body["choices"]
+    assert isinstance(choices, list)
+    choice = choices[0]
+    assert isinstance(choice, dict)
+    choice["finish_reason"] = "length"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    model = OpenAICompatibleModel(
+        "http://answer.invalid/v1",
+        "gemini-flash-lite-latest",
+        transport=httpx.MockTransport(handler),
+        min_interval_s=0,
+    )
+    reply = await model.complete(_request())
+
+    assert reply.finish_reason == "length"
+    assert reply.structured_mode == "tool"
+    assert reply.http_status == 200
+    assert reply.response_excerpt
+    assert len(reply.response_excerpt) <= 200
+
+
+async def test_request_override_sends_a_json_only_body() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": (
+                                '{"claims": [], "insufficient_evidence": true}'
+                            )
+                        },
+                    }
+                ]
+            },
+        )
+
+    model = OpenAICompatibleModel(
+        "http://fallback.invalid/v1",
+        "gemini-flash-lite-latest",
+        transport=httpx.MockTransport(handler),
+        min_interval_s=0,
+    )
+    reply = await model.complete(
+        ModelRequest(
+            question="q",
+            system_prompt="s",
+            user_prompt="u",
+            chunks=(),
+            structured_output="json",
+        )
+    )
+
+    assert "tools" not in seen
+    assert "tool_choice" not in seen
+    assert reply.structured_mode == "json"
+    assert reply.finish_reason == "stop"
+    assert reply.payload == {"claims": [], "insufficient_evidence": True}
