@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import Any, cast
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import CursorResult, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from docqa.db import Chunk as ChunkRow
@@ -31,14 +32,14 @@ class SweepReport:
 
 
 def utcnow() -> datetime:
-    """A timezone-aware ``now``; the database columns are timestamptz."""
-    return datetime.now(timezone.utc)
+    """Return a timezone-aware ``now``; the database columns are timestamptz."""
+    return datetime.now(UTC)
 
 
 async def count_client_uploads_since(
     session: AsyncSession, client_id: str, since: datetime
 ) -> int:
-    """Uploads this client made since ``since`` (every attempt counts)."""
+    """Count uploads this client made since ``since`` (every attempt counts)."""
     return int(
         await session.scalar(
             select(func.count())
@@ -50,7 +51,7 @@ async def count_client_uploads_since(
 
 
 async def count_host_uploads_since(session: AsyncSession, since: datetime) -> int:
-    """Uploads the whole host accepted since ``since``."""
+    """Count uploads the whole host accepted since ``since``."""
     return int(
         await session.scalar(
             select(func.count()).select_from(Upload).where(Upload.created_at >= since)
@@ -60,7 +61,7 @@ async def count_host_uploads_since(session: AsyncSession, since: datetime) -> in
 
 
 async def active_upload_for(session: AsyncSession, client_id: str) -> Upload | None:
-    """The one queued/parsing/embedding upload for a client, if any."""
+    """Return the one queued/parsing/embedding upload for a client, if any."""
     return await session.scalar(
         select(Upload)
         .where(Upload.client_id == client_id, Upload.status.in_(RUNNING_STATUSES))
@@ -72,7 +73,7 @@ async def active_upload_for(session: AsyncSession, client_id: str) -> Upload | N
 async def owned_upload(
     session: AsyncSession, upload_id: uuid.UUID, client_id: str
 ) -> Upload | None:
-    """An upload only when this signed client owns it."""
+    """Return an upload only when this signed client owns it."""
     return await session.scalar(
         select(Upload).where(
             Upload.id == upload_id, Upload.client_id == client_id
@@ -83,7 +84,7 @@ async def owned_upload(
 async def ready_upload_for_collection(
     session: AsyncSession, client_id: str, collection_id: str
 ) -> Upload | None:
-    """A ready upload that authorises ``/ask`` for this client and collection."""
+    """Return a ready upload that authorises ``/ask`` for this client and collection."""
     return await session.scalar(
         select(Upload).where(
             Upload.collection_id == collection_id,
@@ -96,7 +97,7 @@ async def ready_upload_for_collection(
 async def page_for(
     session: AsyncSession, upload: Upload, page_no: int
 ) -> UploadPage | None:
-    """The stored text for one page of one upload."""
+    """Return the stored text for one page of one upload."""
     return await session.scalar(
         select(UploadPage).where(
             UploadPage.upload_id == upload.id, UploadPage.page_no == page_no
@@ -126,7 +127,7 @@ async def recover_interrupted(session: AsyncSession, older_than: datetime) -> in
             finished_at=func.now(),
         )
     )
-    return int(result.rowcount or 0)
+    return int(cast(CursorResult[Any], result).rowcount or 0)
 
 
 async def sweep_expired(
@@ -187,7 +188,7 @@ async def sweep_expired(
         delete(Upload).where(Upload.id.in_(upload_ids))
     )
     return SweepReport(
-        uploads=int(deleted.rowcount or 0),
+        uploads=int(cast(CursorResult[Any], deleted).rowcount or 0),
         documents=documents,
         chunks=chunks,
         pages=pages,

@@ -15,7 +15,7 @@ def test_a_minted_token_verifies_to_its_client_id() -> None:
 
 def test_a_tampered_signature_is_rejected() -> None:
     signer = SessionSigner("test-secret")
-    client_id, token = signer.new_token()
+    client_id, _token = signer.new_token()
     forged = f"{client_id}.{'0' * 64}"
     assert signer.verify(forged) is None
 
@@ -23,7 +23,7 @@ def test_a_tampered_signature_is_rejected() -> None:
 def test_a_token_signed_with_another_secret_is_rejected() -> None:
     first = SessionSigner("first-secret")
     second = SessionSigner("second-secret")
-    client_id, token = first.new_token()
+    _client_id, token = first.new_token()
     assert second.verify(token) is None
 
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from sqlalchemy import delete, func, select
@@ -80,7 +80,7 @@ async def _insert_upload(
     created_delta: timedelta = timedelta(),
     started_delta: timedelta | None = None,
 ) -> Upload:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     collection = collection_id or f"u_{uuid.uuid4().hex}"
     upload = Upload(
         id=uuid.uuid4(),
@@ -154,7 +154,7 @@ async def test_only_a_ready_upload_backs_a_collection() -> None:
 
 async def test_quota_counts_are_windowed_per_client_and_host() -> None:
     engine, factory = await _database()
-    since = datetime.now(timezone.utc) - timedelta(hours=1)
+    since = datetime.now(UTC) - timedelta(hours=1)
     try:
         async with factory() as session, session.begin():
             await _insert_upload(session, CLIENT_A, created_delta=timedelta(minutes=-5))
@@ -344,7 +344,7 @@ async def test_recovery_fails_an_upload_interrupted_by_a_restart() -> None:
             )
         async with factory() as session, session.begin():
             recovered = await recover_interrupted(
-                session, older_than=datetime.now(timezone.utc) - timedelta(minutes=10)
+                session, older_than=datetime.now(UTC) - timedelta(minutes=10)
             )
             assert recovered >= 1
         async with factory() as session:

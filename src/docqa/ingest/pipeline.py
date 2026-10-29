@@ -12,7 +12,7 @@ import anyio
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from docqa.config import Settings
+from docqa.config import DEMO_COLLECTION, Settings
 from docqa.db import Chunk as ChunkRow
 from docqa.db import Document, make_engine, make_session_factory
 from docqa.ingest.chunking import Chunk, build_chunks
@@ -159,11 +159,17 @@ async def _upsert_document(
 ) -> bool:
     """Replace a document's chunks atomically; returns True when it already existed."""
     existing = await session.scalar(
-        select(Document).where(Document.sha256 == entry.sha256)
+        select(Document).where(
+            Document.sha256 == entry.sha256,
+            Document.collection_id == DEMO_COLLECTION,
+        )
     )
     if existing is None:
         existing = await session.scalar(
-            select(Document).where(Document.doc_id == entry.doc_id)
+            select(Document).where(
+                Document.doc_id == entry.doc_id,
+                Document.collection_id == DEMO_COLLECTION,
+            )
         )
     updated = existing is not None
     if existing is None:
@@ -213,6 +219,7 @@ async def _upsert_document(
                 breadcrumb=chunk.breadcrumb,
                 text=chunk.text,
                 token_count=chunk.token_count,
+                collection_id=DEMO_COLLECTION,
                 embedding=vector,
             )
             for chunk, vector in zip(chunks, vectors, strict=True)
