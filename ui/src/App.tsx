@@ -10,10 +10,16 @@ import {
   type ReactNode,
 } from 'react';
 
-import { askQuestionWithWarmup, warmApi } from './api';
+import {
+  askQuestionWithWarmup,
+  uploadStatus,
+  uploadedPdfUrl,
+  warmApi,
+} from './api';
 import { EvalPage } from './components/EvalPage';
 import { PdfPane } from './components/PdfPane';
 import { TraceDrawer } from './components/TraceDrawer';
+import { UploadPanel } from './components/UploadPanel';
 import {
   DEFAULT_DEMO_QUESTION,
   DEMO_PAPER,
@@ -22,7 +28,7 @@ import {
   type DemoQuestion,
 } from './demoPaper';
 import { formatQuoted } from './typography';
-import type { AskResponse, Citation } from './types';
+import type { AskResponse, Citation, UploadDocument } from './types';
 
 interface Selection {
   citation: Citation;
@@ -43,10 +49,21 @@ function citationKey(citation: Citation): string {
   return `${citation.chunk_id}|${citation.page_no}|${citation.quote}`;
 }
 
-function sourceLabel(source: { doc_id: string }): string {
-  return source.doc_id === DEMO_PAPER.doc_id
-    ? DEMO_PAPER.title
-    : source.doc_id;
+function sourceLabel(docId: string, upload: UploadDocument | null): string {
+  if (upload && docId === `upload:${upload.collection}`) {
+    return upload.filename;
+  }
+  return docId === DEMO_PAPER.doc_id ? DEMO_PAPER.title : docId;
+}
+
+function uploadDocumentId(upload: UploadDocument): string {
+  return `upload:${upload.collection}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function splitTrailingWord(text: string): { lead: string; tail: string } {
@@ -126,11 +143,13 @@ function CitationMark({
   citation,
   number,
   selected,
+  sourceName,
   onSelect,
 }: {
   citation: Citation;
   number: number;
   selected: boolean;
+  sourceName: string;
   onSelect: () => void;
 }) {
   return (
@@ -138,7 +157,7 @@ function CitationMark({
       <button
         type="button"
         className={selected ? 'citation-sup selected' : 'citation-sup'}
-        aria-label={`Source ${number}: ${sourceLabel(citation)}, page ${citation.page_no}`}
+        aria-label={`Source ${number}: ${sourceName}, page ${citation.page_no}`}
         aria-pressed={selected}
         title={citation.quote}
         data-testid="claim-citation"
@@ -153,10 +172,12 @@ function CitationMark({
 function Sources({
   sources,
   selectedKey,
+  labelFor,
   onSelect,
 }: {
   sources: readonly SourceEntry[];
   selectedKey: string | null;
+  labelFor: (docId: string) => string;
   onSelect: (citation: Citation) => void;
 }) {
   if (sources.length === 0) {
@@ -173,7 +194,7 @@ function Sources({
               <button
                 type="button"
                 className={selected ? 'source-row selected' : 'source-row'}
-                aria-label={`Source ${number}: ${sourceLabel(citation)}, page ${citation.page_no}`}
+                aria-label={`Source ${number}: ${labelFor(citation.doc_id)}, page ${citation.page_no}`}
                 aria-pressed={selected}
                 data-testid="source-row"
                 onClick={() => onSelect(citation)}
@@ -181,7 +202,9 @@ function Sources({
                 <span className="source-number">{number}</span>
                 <span className="source-copy">
                   <span className="source-meta">
-                    <span className="source-file">{sourceLabel(citation)}</span>
+                    <span className="source-file">
+                      {labelFor(citation.doc_id)}
+                    </span>
                     <span aria-hidden="true">·</span>
                     <span className="source-page">
                       Page {citation.page_no}
@@ -241,7 +264,13 @@ function refusalCopy(reason: string | null): string {
   }
 }
 
-function RefusalCard({ answer }: { answer: AskResponse }) {
+function RefusalCard({
+  answer,
+  labelFor,
+}: {
+  answer: AskResponse;
+  labelFor: (docId: string) => string;
+}) {
   return (
     <div className="refusal" data-testid="refusal">
       <p className="eyebrow">No supported answer</p>
@@ -254,7 +283,7 @@ function RefusalCard({ answer }: { answer: AskResponse }) {
             {answer.passages.map((passage, index) => (
               <li key={`${passage.chunk_id}-${index}`}>
                 <span className="passage-meta">
-                  {sourceLabel(passage)} · page {passage.page_no} ·{' '}
+                  {labelFor(passage.doc_id)} · page {passage.page_no} ·{' '}
                   {passage.breadcrumb}
                 </span>
                 <span>{passage.text}</span>
@@ -279,6 +308,7 @@ function AskPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [citationRenderMiss, setCitationRenderMiss] = useState(0);
   const [missDetails, setMissDetails] = useState<string[]>([]);
+  const [upload, setUpload] = useState<UploadDocument | null>(null);
 
   const attemptSeq = useRef(0);
   const missedAttempts = useRef(new Set<string>());
@@ -301,6 +331,40 @@ function AskPage() {
   // first question does not pay the whole cold start in front of an error page.
   useEffect(() => {
     void warmApi();
+  }, []);
+
+  // A reload keeps the visitor's document open: `?document=` names an upload
+  // this cookie owns. A foreign or swept id silently falls back to the demo.
+  useEffect(() => {
+    const wanted = new URLSearchParams(window.location.search).get('document');
+    if (!wanted) {
+      return;
+    }
+    let cancelled = false;
+    const restore = async (): Promise<void> => {
+      try {
+        let next = await uploadStatus(wanted);
+        for (let attempt = 0; attempt < 120; attempt += 1) {
+          if (cancelled || next.status === 'ready' || next.status === 'failed') {
+            break;
+          }
+          await sleep(1_000);
+          if (cancelled) {
+            return;
+          }
+          next = await uploadStatus(wanted);
+        }
+        if (!cancelled && next.status === 'ready') {
+          setUpload(next);
+        }
+      } catch {
+        // Unknown, foreign, or swept: leave the demo paper open.
+      }
+    };
+    void restore();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleMiss = useCallback((attemptId: string) => {
@@ -345,8 +409,28 @@ function AskPage() {
     presentAnswer(example.answer);
   };
 
+  const openUpload = (next: UploadDocument): void => {
+    setUpload(next);
+    setAnswer(null);
+    setSelection(null);
+    setError(null);
+    setQuestion('');
+    window.history.replaceState(
+      {},
+      '',
+      `/?document=${encodeURIComponent(next.id)}`,
+    );
+  };
+
+  const openDemo = (): void => {
+    setUpload(null);
+    setQuestion(DEFAULT_DEMO_QUESTION.question);
+    presentAnswer(DEFAULT_DEMO_QUESTION.answer);
+    window.history.replaceState({}, '', '/');
+  };
+
   const run = async (text: string): Promise<void> => {
-    const recorded = demoForQuestion(text);
+    const recorded = upload ? undefined : demoForQuestion(text);
     if (recorded) {
       presentAnswer(recorded.answer);
       return;
@@ -358,8 +442,10 @@ function AskPage() {
     setAnswer(null);
     setSelection(null);
     try {
-      const response = await askQuestionWithWarmup(text, () =>
-        setColdStarting(true),
+      const response = await askQuestionWithWarmup(
+        text,
+        () => setColdStarting(true),
+        upload?.collection,
       );
       presentAnswer(response);
     } catch (cause) {
@@ -405,10 +491,18 @@ function AskPage() {
   const selectedNumber = selection
     ? (sourceNumbers.get(citationKey(selection.citation)) ?? null)
     : null;
+  const openDocumentId = upload ? uploadDocumentId(upload) : DEMO_PAPER.doc_id;
+  const documentTitle = upload ? upload.filename : DEMO_PAPER.title;
+  const documentPages = upload?.pages_total ?? DEMO_PAPER.page_count;
+  const documentUrl = upload ? uploadedPdfUrl(upload.id) : DEMO_PAPER.pdf;
   const renderableCitation =
-    selection && selection.citation.doc_id === DEMO_PAPER.doc_id
+    selection && selection.citation.doc_id === openDocumentId
       ? selection.citation
       : null;
+  const labelFor = useCallback(
+    (docId: string) => sourceLabel(docId, upload),
+    [upload],
+  );
   const trace = answer?.trace ?? null;
 
   return (
@@ -419,8 +513,8 @@ function AskPage() {
         ref={documentRef}
       >
         <div className="document-heading">
-          <h1>{DEMO_PAPER.title}</h1>
-          <p className="document-meta">{DEMO_PAPER.page_count} pages</p>
+          <h1>{documentTitle}</h1>
+          <p className="document-meta">{documentPages} pages</p>
         </div>
         {selection && renderableCitation === null ? (
           <p className="doc-note">
@@ -430,7 +524,7 @@ function AskPage() {
           </p>
         ) : null}
         <PdfPane
-          pdfUrl={DEMO_PAPER.pdf}
+          pdfUrl={documentUrl}
           citation={renderableCitation}
           citationNumber={selectedNumber}
           attemptId={selection?.attemptId ?? ''}
@@ -439,6 +533,12 @@ function AskPage() {
       </section>
 
       <section className="answer-pane" aria-labelledby="ask-heading">
+        <UploadPanel
+          active={upload}
+          onReady={openUpload}
+          onDemo={openDemo}
+        />
+
         <header className="ask-head">
           <h2 id="ask-heading">Ask the document.</h2>
         </header>
@@ -465,7 +565,9 @@ function AskPage() {
           </div>
         </form>
 
-        <ExampleQuestions onChoose={loadExample} />
+        {upload === null ? (
+          <ExampleQuestions onChoose={loadExample} />
+        ) : null}
 
         {error ? (
           <div className="error-banner" role="alert">
@@ -499,7 +601,7 @@ function AskPage() {
             </header>
 
             {answer.insufficient_evidence ? (
-              <RefusalCard answer={answer} />
+              <RefusalCard answer={answer} labelFor={labelFor} />
             ) : answer.claims.length > 0 ? (
               <>
                 <ol className="claims" aria-label="Answer claims">
@@ -518,6 +620,7 @@ function AskPage() {
                               citation={citation}
                               number={number}
                               selected={selectedKey === citationKey(citation)}
+                              sourceName={labelFor(citation.doc_id)}
                               onSelect={() => selectCitation(citation)}
                             />
                           );
@@ -530,6 +633,7 @@ function AskPage() {
                 <Sources
                   sources={sources}
                   selectedKey={selectedKey}
+                  labelFor={labelFor}
                   onSelect={selectCitation}
                 />
               </>
