@@ -23,6 +23,12 @@ services:
     envVars:
       - key: DOCQA_DATABASE_URL
         sync: false
+      # Signs the opaque visitor cookie; set once so sessions survive a deploy.
+      - key: DOCQA_COOKIE_SECRET
+        sync: false
+      # The UI is another origin over HTTPS: the cookie is Secure + SameSite=None.
+      - key: DOCQA_COOKIE_SECURE
+        value: "1"
       - key: DOCQA_MODEL_API_KEY
         sync: false
       - key: DOCQA_MODEL_BASE_URL

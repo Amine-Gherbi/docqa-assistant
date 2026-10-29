@@ -26,7 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from docqa.config import EMBEDDING_DIM
+from docqa.config import DEMO_COLLECTION, EMBEDDING_DIM
 from docqa.ingest.embedder import Embedder
 from docqa.rerank import Reranker
 
@@ -51,6 +51,7 @@ _VECTOR_SQL = text(
            1 - (c.embedding <=> CAST(CAST(:vec AS text) AS vector)) AS score
     FROM chunks AS c
     JOIN documents AS d ON d.id = c.document_id
+    WHERE c.collection_id = :collection
     ORDER BY c.embedding <=> CAST(CAST(:vec AS text) AS vector), c.id
     LIMIT :limit
     """
@@ -70,7 +71,8 @@ _LEXICAL_SQL = text(
            ts_rank_cd(c.tsv, plainto_tsquery('english', :query)) AS score
     FROM chunks AS c
     JOIN documents AS d ON d.id = c.document_id
-    WHERE c.tsv @@ plainto_tsquery('english', :query)
+    WHERE c.collection_id = :collection
+      AND c.tsv @@ plainto_tsquery('english', :query)
     ORDER BY score DESC, c.id
     LIMIT :limit
     """
@@ -219,9 +221,12 @@ class CandidateSource(Protocol):
 class PgCandidateSource:
     """Candidate lists from PostgreSQL + pgvector."""
 
-    def __init__(self, session: AsyncSession) -> None:
-        """Bind the session used for both reads."""
+    def __init__(
+        self, session: AsyncSession, collection: str = DEMO_COLLECTION
+    ) -> None:
+        """Bind the session and the one collection both reads may see."""
         self._session = session
+        self._collection = collection
 
     async def vector_candidates(
         self, embedding: Sequence[float], limit: int
@@ -230,7 +235,12 @@ class PgCandidateSource:
         if limit <= 0:
             return []
         result = await self._session.execute(
-            _VECTOR_SQL, {"vec": _vector_literal(embedding), "limit": limit}
+            _VECTOR_SQL,
+            {
+                "vec": _vector_literal(embedding),
+                "limit": limit,
+                "collection": self._collection,
+            },
         )
         return [_scored_chunk(row) for row in result.mappings()]
 
@@ -239,7 +249,8 @@ class PgCandidateSource:
         if limit <= 0 or not query.strip():
             return []
         result = await self._session.execute(
-            _LEXICAL_SQL, {"query": query, "limit": limit}
+            _LEXICAL_SQL,
+            {"query": query, "limit": limit, "collection": self._collection},
         )
         return [_scored_chunk(row) for row in result.mappings()]
 

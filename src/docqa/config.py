@@ -92,6 +92,10 @@ class Settings:
     # Signs the opaque client cookie. Unset mints a per-process secret, which
     # invalidates cookies on restart; the hosted service sets a stable value.
     cookie_secret: str | None = None
+    # The hosted API sits behind a TLS proxy and the UI is another origin, so
+    # the cookie must be Secure + SameSite=None. Set explicitly there rather
+    # than trusting the proxy's forwarded scheme header.
+    cookie_secure: bool = False
 
     @property
     def lock_path(self) -> Path:
@@ -410,4 +414,5 @@ def get_settings() -> Settings:
             minimum=1.0,
         ),
         cookie_secret=os.environ.get("DOCQA_COOKIE_SECRET", "").strip() or None,
+        cookie_secure=_boolean_from_environment("DOCQA_COOKIE_SECURE"),
     )
