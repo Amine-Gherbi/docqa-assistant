@@ -1,11 +1,11 @@
 {
-  "checked_at": "2026-10-23T18:39:11.034080+00:00",
+  "checked_at": "2026-10-29T14:52:58.958034+00:00",
   "detail": "gateway returned the forced submit_answer call",
-  "endpoint": "https://text.pollinations.ai/openai",
+  "endpoint": "https://generativelanguage.googleapis.com/v1beta/openai",
   "json_mode_ok": null,
   "mode": "tool",
-  "model": "openai-fast",
+  "model": "gemini-flash-lite-latest",
   "tool_call_returned": true,
   "tool_choice_sent": true,
-  "wall_clock_s": 0.922
+  "wall_clock_s": 14.531
 }

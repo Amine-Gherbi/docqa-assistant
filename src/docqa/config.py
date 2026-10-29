@@ -13,13 +13,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres@localhost:5433/docqa"
 DEFAULT_EMBEDDING_MODEL = "BAAI/bge-small-en-v1.5"
 DEFAULT_MODEL_NAME = "claude-sonnet-5-5"
+DEFAULT_MODEL_TIMEOUT_S = 180.0
 DEFAULT_CALIBRATION_PATH = PROJECT_ROOT / "eval" / "calibration.json"
 DEFAULT_STRUCTURED_OUTPUT_PROBE = PROJECT_ROOT / "eval" / "structured-output.json"
 DEFAULT_DEMO_ANSWERS_PATH = PROJECT_ROOT / "data" / "demo-answers.json"
 EMBEDDING_DIM = 384
 
-# The free keyless endpoint answers once per 30 s per IP; 31 s leaves margin.
-DEFAULT_MODEL_MIN_INTERVAL_S = 31.0
+# The keyed free tier answers one request at a time; 20 s between request
+# starts leaves room for a ~15 s answer plus the provider's own pacing.
+DEFAULT_MODEL_MIN_INTERVAL_S = 20.0
 DEFAULT_MODEL_MAX_RETRIES = 2
 DEFAULT_MODEL_RETRY_BACKOFF_S = 5.0
 
@@ -43,6 +45,8 @@ class Settings:
     model_timeout_s: float
     structured_output: StructuredOutputMode
     calibration_path: Path
+    model_fallback_names: tuple[str, ...] = ()
+    judge_api_key: str | None = None
     model_min_interval_s: float = DEFAULT_MODEL_MIN_INTERVAL_S
     model_max_retries: int = DEFAULT_MODEL_MAX_RETRIES
     model_retry_backoff_s: float = DEFAULT_MODEL_RETRY_BACKOFF_S
@@ -63,9 +67,25 @@ class Settings:
         """True when a model endpoint is configured; otherwise the extractive fallback runs."""
         return bool(self.model_base_url and self.model_name)
 
+    @property
+    def model_chain(self) -> tuple[str, ...]:
+        """The model ids to try in order: the primary, then the documented retries."""
+        return (self.model_name, *self.model_fallback_names)
+
+
+def _fallback_names_from_environment(primary: str) -> tuple[str, ...]:
+    """Read ``DOCQA_MODEL_FALLBACK_NAMES`` as an ordered, de-duplicated chain."""
+    raw = os.environ.get("DOCQA_MODEL_FALLBACK_NAMES", "")
+    names: list[str] = []
+    for item in raw.split(","):
+        name = item.strip()
+        if name and name != primary and name not in names:
+            names.append(name)
+    return tuple(names)
+
 
 def _timeout_from_environment() -> float:
-    raw = os.environ.get("DOCQA_MODEL_TIMEOUT_S", "60")
+    raw = os.environ.get("DOCQA_MODEL_TIMEOUT_S", str(DEFAULT_MODEL_TIMEOUT_S))
     try:
         value = float(raw)
     except ValueError as exc:
@@ -152,6 +172,7 @@ def get_settings() -> Settings:
         os.environ.get("DOCQA_MODEL_BASE_URL", "").strip() or None
     )
     api_key = os.environ.get("DOCQA_MODEL_API_KEY", "").strip() or None
+    judge_api_key = os.environ.get("DOCQA_JUDGE_API_KEY", "").strip() or api_key
     model_name = os.environ.get("DOCQA_MODEL_NAME", DEFAULT_MODEL_NAME).strip() or (
         DEFAULT_MODEL_NAME
     )
@@ -193,6 +214,8 @@ def get_settings() -> Settings:
         calibration_path=Path(
             os.environ.get("DOCQA_CALIBRATION", str(DEFAULT_CALIBRATION_PATH))
         ),
+        model_fallback_names=_fallback_names_from_environment(model_name),
+        judge_api_key=judge_api_key,
         model_min_interval_s=_min_interval_from_environment(),
         model_max_retries=_retries_from_environment(),
         model_retry_backoff_s=backoff,

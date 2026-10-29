@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
+from urllib.parse import urlparse
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +49,13 @@ from docqa.answer import (
 from docqa.config import PROJECT_ROOT, Settings, get_settings
 from docqa.db import make_engine, make_session_factory
 from docqa.ingest.embedder import Embedder, build_embedder
+from docqa.judge import (
+    JudgeStatus,
+    kappa_decision,
+    probe_judge,
+    read_flat_yaml,
+    write_judge_status,
+)
 from docqa.rerank import Reranker, build_reranker
 from docqa.retrieval import (
     PgCandidateSource,
@@ -372,6 +380,8 @@ class QuestionOutcome:
     refusal_threshold: float | None
     latency_ms: float
     error: str | None
+    model_requested: str | None = None
+    model_answered: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         """JSON-safe row."""
@@ -430,6 +440,7 @@ def _build_outcome(
     *,
     mode: RetrievalMode,
     latency_ms: float,
+    requested_model: str | None = None,
     error: str | None = None,
 ) -> QuestionOutcome:
     context_ids = {chunk.chunk_id for chunk in retrieval.chunks}
@@ -452,6 +463,8 @@ def _build_outcome(
         claims_faithful = 0
         schema_failures = 0
         probability = None
+        model_requested = requested_model
+        model_answered = None
     else:
         refused = response.insufficient_evidence
         answered = not refused and bool(response.claims)
@@ -477,6 +490,8 @@ def _build_outcome(
         )
         schema_failures = response.validation.schema_failures
         probability = response.refusal_probability
+        model_requested = response.model_requested or requested_model
+        model_answered = response.model_answered
 
     refused_for_schema = bool(
         response is not None
@@ -527,6 +542,8 @@ def _build_outcome(
         refusal_threshold=response.calibration.threshold if response is not None else None,
         latency_ms=round(latency_ms, 1),
         error=error,
+        model_requested=model_requested,
+        model_answered=model_answered,
     )
 
 
@@ -688,24 +705,24 @@ class EvalReport:
         return all(gate.passed for gate in self.gates)
 
 
-def _judge_provenance(settings: Settings) -> dict[str, object]:
-    """Describe how citation precision and faithfulness were computed."""
-    judge_artifact = settings.calibration_path.parent / "judge.yaml"
-    judge_endpoint = os.environ.get("DOCQA_JUDGE_BASE_URL", "").strip()
-    if judge_endpoint and judge_artifact.is_file():
-        raise EvalError(
-            "a judge endpoint and eval/judge.yaml are configured, but this harness "
-            "has no judge client; remove them to run the rule-based checker"
-        )
-    reason = (
-        "no judge model is reachable: DOCQA_JUDGE_BASE_URL is unset"
-        if not judge_endpoint
-        else "eval/judge.yaml (the pinned judge protocol) is absent"
-    )
+def _judge_provenance(
+    judge_status: JudgeStatus, *, n_questions: int
+) -> dict[str, object]:
+    """Describe how citation precision and faithfulness were computed.
+
+    The rule-based checker is always the reported metric. The judge block says
+    whether the pinned judge id answered, with every attempt's HTTP status, and
+    why no Cohen's kappa is computed.
+    """
     return {
         "kind": RULE_BASED_LABEL,
         "model_judge_used": False,
-        "reason": reason,
+        "status": judge_status.status,
+        "model": judge_status.model,
+        "attempts": [attempt.as_dict() for attempt in judge_status.attempts],
+        "retries": judge_status.retries,
+        "reason": judge_status.reason,
+        "kappa": kappa_decision(n_questions),
         "metrics": ["citation_precision", "faithfulness"],
         "rule": (
             "citation precision: a citation is correct when it names the gold "
@@ -713,6 +730,47 @@ def _judge_provenance(settings: Settings) -> dict[str, object]:
             "and its verbatim quote contains, or is contained in, the gold quote"
         ),
     }
+
+
+def _judge_model(settings: Settings) -> tuple[str | None, str | None]:
+    """Read the pinned judge id; return ``(model, problem)``."""
+    judge_artifact = settings.calibration_path.parent / "judge.yaml"
+    try:
+        protocol = read_flat_yaml(judge_artifact)
+    except OSError as exc:
+        return None, f"judge protocol is not readable: {exc}"
+    except ValueError as exc:
+        return None, f"judge protocol is invalid: {exc}"
+    model = protocol.get("model", "").strip()
+    if not model:
+        return None, "eval/judge.yaml carries no model id"
+    return model, None
+
+
+async def _judge_status(settings: Settings, n_questions: int) -> JudgeStatus:
+    """Probe the pinned judge id, or record why it could not be probed."""
+    model, problem = _judge_model(settings)
+    if problem is not None:
+        return JudgeStatus(
+            status="judge_protocol_invalid",
+            model=None,
+            attempts=(),
+            retries=0,
+            reason=f"{problem}; the rule-based metric stays the reported one",
+        )
+    assert model is not None
+    if not settings.model_configured:
+        return JudgeStatus(
+            status="judge_not_configured",
+            model=model,
+            attempts=(),
+            retries=0,
+            reason=(
+                "the judge is pinned but no model endpoint is configured; the "
+                "rule-based metric stays the reported one"
+            ),
+        )
+    return await probe_judge(settings, model)
 
 
 async def _selected_retrieval(
@@ -754,6 +812,17 @@ async def evaluate(
     reranker_choice = build_reranker(mode=os.environ.get("DOCQA_RERANKER", "auto"))
     calibration = load_calibration(resolved_settings.calibration_path)
     model = build_model(resolved_settings)
+    judge_status = await _judge_status(resolved_settings, len(questions))
+    write_judge_status(
+        resolved_settings.calibration_path.parent / "judge-status.json",
+        judge_status,
+    )
+    requested_models = tuple(getattr(model, "model_chain", (resolved_settings.model_name,)))
+    endpoint_host = (
+        urlparse(resolved_settings.model_base_url).hostname
+        if resolved_settings.model_base_url
+        else None
+    )
 
     engine = make_engine(resolved_settings)
     factory = make_session_factory(engine)
@@ -830,6 +899,9 @@ async def evaluate(
                         response,
                         mode=resolved_config.mode,
                         latency_ms=elapsed_ms,
+                        requested_model=getattr(
+                            model, "requested_model", resolved_settings.model_name
+                        ),
                         error=error,
                     )
                 )
@@ -869,10 +941,24 @@ async def evaluate(
                 "hand-authored from the 260 ingested chunks; every quote is checked "
                 "against the live chunk text before measurement"
             ),
-            "judge": _judge_provenance(resolved_settings),
+            "judge": _judge_provenance(judge_status, n_questions=len(questions)),
             "generator": {
                 "name": model.name,
                 "structured_output": model.structured_output,
+                "endpoint": resolved_settings.model_base_url,
+                "endpoint_host": endpoint_host,
+                "requested_models": list(requested_models),
+                "model_min_interval_s": resolved_settings.model_min_interval_s,
+                "model_timeout_s": resolved_settings.model_timeout_s,
+                "model_max_retries": resolved_settings.model_max_retries,
+                "model_retry_backoff_s": resolved_settings.model_retry_backoff_s,
+                "observed_answering_models": sorted(
+                    {
+                        row.model_answered
+                        for row in outcomes
+                        if row.model_answered is not None
+                    }
+                ),
             },
             "embedder": choice.embedder.name,
             "reranker": reranker_choice.reranker.name,

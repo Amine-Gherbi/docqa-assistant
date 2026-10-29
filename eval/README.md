@@ -43,11 +43,20 @@ the Transformer; `learning rate` / `dropout` for RAG).
 
 ## Judge provenance
 
-No judge model is reachable in this build: `DOCQA_JUDGE_BASE_URL` is unset and
-`eval/judge.yaml` does not exist. Citation precision and faithfulness are
-therefore computed by a deterministic rule-based checker and are labelled
+`eval/judge.yaml` pins a judge model with a different exact id from the
+generator (`gemini-3.8-flash` against `gemini-flash-lite-latest`), a prompt
+hash and temperature 0. The eval asks the pinned judge id one real question and
+records the exact HTTP status of every attempt in `provenance.judge` and
+`eval/judge-status.json`. It never substitutes the generator as judge.
+
+No Cohen's kappa is computed. The gold file labels **questions** (answerable or
+not, with a supporting span); it contains no human judgement of whether a cited
+span supports a specific claim, which is the quantity a judge produces. The
+report therefore says how many question labels exist and that zero human judge
+labels exist, rather than inventing a comparison. Citation precision and
+faithfulness come from a deterministic rule-based checker and are labelled
 `rule-based, not a model judge` in both the console output and
-`eval-report.json`. They are not presented as model-judge scores.
+`eval-report.json`.
 
 ## Row format
 

@@ -1,0 +1,23 @@
+{
+  "attempts": [
+    {
+      "attempt": 1,
+      "error": "ReadTimeout: ",
+      "http_status": null
+    },
+    {
+      "attempt": 2,
+      "error": null,
+      "http_status": 503
+    },
+    {
+      "attempt": 3,
+      "error": "ReadTimeout: ",
+      "http_status": null
+    }
+  ],
+  "model": "gemini-3.8-flash",
+  "reason": "judge model gemini-3.8-flash did not answer after 3 attempt(s); HTTP statuses: [None, 503, None]. The generator is never substituted as judge; citation precision and faithfulness stay rule-based. Note: this id is also the generator's documented retry, so any answer served by that retry would share an id with the judge.",
+  "retries": 2,
+  "status": "judge_model_unavailable"
+}

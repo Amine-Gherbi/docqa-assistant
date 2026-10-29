@@ -46,18 +46,19 @@ payload shape, so the citation gate is exercised end to end without a model.
    then the refusal path. Silent mode changes would make the probe verdict
    meaningless.
 
-## Verification status (2026-10-23)
+## Verification status
 
 The probe was first exercised against a local loopback stub, then against the
-**live keyless gateway** `https://text.pollinations.ai/openai` with model
-`openai-fast`. That request carried
+keyed Gemini free tier (`https://generativelanguage.googleapis.com/v1beta/openai/`,
+model `gemini-flash-lite-latest`). That request carried
 `tool_choice={"type":"function","function":{"name":"submit_answer"}}` and the
 gateway returned a `submit_answer` tool call; the verdict is
 `eval/structured-output.json` (`mode: "tool"`, `tool_call_returned: true`,
-6.28 s). The recorded verdict is therefore:
+14.531 s). The retired keyless stand-in is recorded in `docs/EVAL.md`. The
+recorded verdict is therefore:
 
 - client serialisation, forced `tool_choice`, and response parsing:
-  **verified** against a real gateway;
+  **verified** against the keyed gateway;
 - JSON fallback: **verified against the loopback stub and unit tests**, not
   needed against this gateway (tool mode was honoured, so JSON mode was not
   probed);

@@ -5,11 +5,16 @@ near-miss, 2 out-of-corpus, 1 under-specified, 1 ambiguous). **Label
 provenance:** every answerable gold span was hand-copied from the ingested chunk
 text (5 papers, 260 chunks) and is re-verified as a normalised substring of the
 named `(doc_id, chunk_index, page_no)` before measurement; no label is
-model-generated. **Judge provenance:** no judge model is reachable in this
-build, so citation precision and faithfulness come from a deterministic
-rule-based checker and are labelled **rule-based, not a model judge**. The set
-is 30 rather than 100 because 100 spans could not be labelled honestly in one
-session; see `eval/README.md` for the reduction and the guard that enforces it.
+model-generated. **Judge provenance:** `eval/judge.yaml` pins
+`gemini-3.8-flash`, a different exact id from the generator; the eval probes it
+and recorded `judge_model_unavailable` (HTTP 503/timeouts, see
+`eval/judge-status.json`). The generator was not substituted as judge, so
+citation precision and faithfulness come from a deterministic rule-based
+checker and are labelled **rule-based, not a model judge**. No Cohen's κ is
+computed: the gold file has 30 question labels and zero human per-claim support
+labels. The set is 30 rather than 100 because 100 spans could not be labelled
+honestly in one session; see `eval/README.md` for the reduction and the guard
+that enforces it.
 
 Generated 2026-10-23 on the build machine (Windows 11, ONNX CPU) against the
 real corpus: `fastembed:BAAI/bge-small-en-v1.5` embeddings and
