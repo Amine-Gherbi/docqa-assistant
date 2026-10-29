@@ -148,6 +148,13 @@ def normalise_database_url(url: str) -> str:
     scheme = parts.scheme
     if scheme in {"postgres", "postgresql"}:
         scheme = "postgresql+asyncpg"
+    netloc = parts.netloc
+    if parts.port is None:
+        # asyncpg falls back to libpq's ``PGPORT`` when the URL omits a port.
+        # This machine exports ``PGPORT=5433`` for its local database, which
+        # would silently send a hosted URL to that local server. Make the
+        # PostgreSQL default explicit so the URL alone decides the target.
+        netloc = f"{netloc}:5432"
     pairs = parse_qsl(parts.query, keep_blank_values=True)
     has_ssl = any(key == "ssl" for key, _ in pairs)
     forwarded: list[tuple[str, str]] = []
@@ -163,7 +170,7 @@ def normalise_database_url(url: str) -> str:
             continue
         forwarded.append((key, value))
     return urlunsplit(
-        (scheme, parts.netloc, parts.path, urlencode(forwarded), parts.fragment)
+        (scheme, netloc, parts.path, urlencode(forwarded), parts.fragment)
     )
 
 

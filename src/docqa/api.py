@@ -11,6 +11,7 @@ responses carry ``"uncalibrated": true`` in their metadata.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import dataclasses
 import json
@@ -25,6 +26,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 
 from docqa.answer import (
     AnswerResponse,
@@ -38,7 +40,12 @@ from docqa.answer import (
 )
 from docqa.cache import AnswerCache, trace_payload
 from docqa.config import PROJECT_ROOT, Settings, get_settings
-from docqa.db import make_engine, make_session_factory, session_scope
+from docqa.db import (
+    alembic_config,
+    make_engine,
+    make_session_factory,
+    session_scope,
+)
 from docqa.ingest.embedder import build_embedder
 from docqa.rerank import build_reranker
 from docqa.retrieval import (
@@ -61,6 +68,92 @@ class AskPayload(BaseModel):
     """Request body for ``POST /ask``."""
 
     question: str = Field(min_length=1, max_length=2000)
+
+
+def corpus_document_count(lock_path: Path) -> int | None:
+    """Count the PDFs pinned in ``corpus.lock.json``; ``None`` if unreadable."""
+    try:
+        raw: object = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(raw, dict):
+        files = cast(dict[str, object], raw).get("files")
+        if isinstance(files, list):
+            return len(cast(list[object], files))
+    return None
+
+
+def migration_head() -> str | None:
+    """Return the revision at the tip of the Alembic history, if available."""
+    try:
+        from alembic.script import ScriptDirectory
+
+        config = alembic_config("postgresql+asyncpg://unused/unused")
+        return ScriptDirectory.from_config(config).get_current_head()
+    except Exception:
+        return None
+
+
+async def readiness_payload(
+    settings: Settings, expected_documents: int | None, head: str | None
+) -> tuple[dict[str, object], int]:
+    """Read the live database's corpus counts and applied migration.
+
+    The free Render plan runs no pre-deploy command, so a service can boot
+    against a database that has the schema but not the corpus. This route makes
+    that state a failed readiness probe instead of an empty answer.
+    """
+    engine = make_engine(settings)
+    try:
+        async with asyncio.timeout(15):
+            async with engine.connect() as connection:
+                documents = int(
+                    (
+                        await connection.execute(text("select count(*) from documents"))
+                    ).scalar_one()
+                )
+                chunks = int(
+                    (
+                        await connection.execute(text("select count(*) from chunks"))
+                    ).scalar_one()
+                )
+                revision_row = (
+                    await connection.execute(text("select version_num from alembic_version"))
+                ).scalar_one_or_none()
+                revision = None if revision_row is None else str(revision_row)
+    except Exception as exc:
+        return {
+            "status": "unavailable",
+            "database": {"status": "error", "error": type(exc).__name__},
+            "migration": {"current": None, "head": head, "ok": False},
+            "corpus": {
+                "documents": None,
+                "chunks": None,
+                "expected_documents": expected_documents,
+                "ok": False,
+            },
+        }, 503
+    finally:
+        await engine.dispose()
+
+    migration_ok = head is not None and revision == head
+    corpus_ok = (
+        expected_documents is not None
+        and documents == expected_documents
+        and chunks > 0
+    )
+    ready = migration_ok and corpus_ok
+    return {
+        "status": "ok" if ready else "degraded",
+        "database": {"status": "ok", "documents": documents, "chunks": chunks},
+        "migration": {"current": revision, "head": head, "ok": migration_ok},
+        "corpus": {
+            "documents": documents,
+            "chunks": chunks,
+            "expected_documents": expected_documents,
+            "ok": corpus_ok,
+        },
+    }, (200 if ready else 503)
 
 
 class PgRetriever:
@@ -167,6 +260,8 @@ def create_app(
         if answer_cache is not None
         else AnswerCache.load(cache_path or resolved.demo_answers_path)
     )
+    expected_documents = corpus_document_count(resolved.corpus_lock)
+    head_revision = migration_head()
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
@@ -215,7 +310,16 @@ def create_app(
                 "model": app_cache.model,
                 "generated_at": app_cache.generated_at,
             },
+            "ready": "/ready",
         }
+
+    @application.get("/ready")
+    async def ready() -> JSONResponse:
+        """Report database reachability, corpus counts, and the applied migration."""
+        payload, status_code = await readiness_payload(
+            resolved, expected_documents, head_revision
+        )
+        return JSONResponse(payload, status_code=status_code)
 
     @application.post("/ask", response_model=None)
     async def ask(

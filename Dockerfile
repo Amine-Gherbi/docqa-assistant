@@ -54,4 +54,5 @@ RUN useradd --create-home --uid 10001 app \
 USER app
 
 EXPOSE 8788
-CMD ["docqa", "serve", "--host", "0.0.0.0", "--port", "8788"]
+# Render injects PORT and routes traffic to it; 8788 is the local default.
+CMD ["sh", "-c", "exec docqa serve --host 0.0.0.0 --port ${PORT:-8788}"]
