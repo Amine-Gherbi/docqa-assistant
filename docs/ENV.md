@@ -413,7 +413,7 @@ The k6 step is **opt-in** (`DOCQA_WITH_K6=1`) because a loopback latency gate in
 whatever else the machine is doing: two runs on this host measured p95 7.92 s and 9.22 s
 for the same code, the second while a Playwright suite was running. A gate that fails
 because another test was running is not a gate. The default `verify` is deterministic
-(lint, types, 147 tests); the load number is measured on demand and quoted with its budget.
+(lint, types, 208 tests); the load number is measured on demand and quoted with its budget.
 
 That is a measured CPU limitation, not a passing grade: the 5 s gate is crossed locally,
 and it stays crossed until inference has a GPU or a smaller model.
