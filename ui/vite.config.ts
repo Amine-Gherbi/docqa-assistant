@@ -29,7 +29,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
-    include: ['src/**/*.test.{ts,tsx}'],
+    include: ['src/**/*.test.{ts,tsx}', 'scripts/**/*.test.mjs'],
     // CSS is processed so `styles.css?raw` exposes the rules the tests assert
     // on (the disclosure must stay at the button's type size).
     css: true,
