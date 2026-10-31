@@ -283,15 +283,17 @@ plus U1 and U6, so 26 calls are needed. The budget is recorded in
 `bash scripts/live.sh warm` generated `data/demo-answers.json` with the six
 demo questions. Of those, T1 and R3 are validated answers; S3, D3 and R2 are
 `validation_failed` refusals (the model's quotes failed the citation contract);
-U5 is a `low_score` refusal. Each entry carries the exact question text, the
-model id recorded at generation time (the retired keyless model), and a
-`generated_at` timestamp. The cache predates the keyed migration and the gold
-calibration refit, so each cached response embeds the then-current calibration
-snapshot (threshold `0.2552`); that is historical metadata, not the threshold now
-loaded at boot. The API serves an exact-question hit with `cached: true` and
-`cache: {model, generated_at}`, and a miss calls the live keyed endpoint. If the
-provider still rate-limits after the documented retries, the API returns HTTP
-429 `{"state": "rate_limited", …}` rather than a 500.
+U5 is a `low_score` refusal. The file was recorded on 2026-10-23, before the
+keyed migration: it no longer reports a model id, and each cached response
+carries `model: null` rather than the retired keyless stand-in. Each entry keeps
+its exact question text and a `generated_at` timestamp. The cache predates the
+gold calibration refit, so each cached response embeds the then-current
+calibration snapshot (threshold `0.2552`); that is historical metadata, not the
+threshold now loaded at boot. The API serves an exact-question hit with
+`cached: true` and `cache: {model, generated_at}` (with `model: null` for this
+file), and a miss calls the live keyed endpoint. If the provider still
+rate-limits after the documented retries, the API returns HTTP 429
+`{"state": "rate_limited", …}` rather than a 500.
 
 ### Probe verdict (keyed endpoint)
 

@@ -104,13 +104,15 @@ serialised.
 |---|---|---|---:|---|---:|---:|---|---|---|---|---:|
 | (a) baseline | 17:43:50–17:46:19 | `0.2552` (provisional) | gate run before the refit | 148.1 s | 5 | 2/24 (8.3%) [2.3%, 25.8%] | 6/6 (100%) [61.0%, 100%] | 2/2 (100%) [34.2%, 100%] | 2/2 (100%) [34.2%, 100%] | 4 PASS / 1 FAIL | 6 |
 | (b) forced diagnostic | 17:52:55–18:08:12 | `0.6361` bypassed | measure the model's own answer rate | 916.4 s | 30 | 8/24 (33.3%) [18.0%, 53.3%] | 5/6 (83.3%) [43.6%, 97.0%] | 7/10 (70.0%) [39.7%, 89.2%] | 7/10 (70.0%) [39.7%, 89.2%] | 3 FAIL (diagnostic only) | 0 by design |
-| (c) final production | 18:09:38–18:22:37 | `0.6361` | gate run after the refit | 778.6 s | 26 | 8/24 (33.3%) [18.0%, 53.3%] | 6/6 (100%) [61.0%, 100%] | 7/9 (77.8%) [45.3%, 93.7%] | 7/9 (77.8%) [45.3%, 93.7%] | 2 PASS / 3 FAIL | 6 |
+| (c) historical pre-keyed gate run | 18:09:38–18:22:37 | `0.6361` | gate run after the refit, before the keyed migration | 778.6 s | 26 | 8/24 (33.3%) [18.0%, 53.3%] | 6/6 (100%) [61.0%, 100%] | 7/9 (77.8%) [45.3%, 93.7%] | 7/9 (77.8%) [45.3%, 93.7%] | 2 PASS / 3 FAIL | 6 |
 
 \* rule-based, not a model judge. Run (b) is **not a gate run**: it bypasses
 only the calibrated low-score refusal (`DOCQA_FORCE_GENERATION=1` /
 `--force-generation`), the citation validator still runs, and the report records
 `run.gate_run: false`. Its report is `eval-report-forced.json`; run (a) is
-`eval-report-baseline.json`; run (c) is `eval-report.json`.
+`eval-report-baseline.json`. Run (c)'s artifact was superseded by the current
+keyed production run now in `eval-report.json`; the historical row above is kept
+as recorded prose, not as the current result.
 
 ## What the forced diagnostic showed
 
@@ -283,7 +285,7 @@ requests and no retries or rate-limit failures.
 |---|---:|---:|---:|---:|---:|
 | (a) baseline | 5 | 0 | 0 | 4 × 31 = 124 s | 148.1 s |
 | (b) forced diagnostic | 30 | 0 | 0 | 29 × 31 = 899 s | 916.4 s |
-| (c) final production | 26 | 0 | 0 | 25 × 31 = 775 s | 778.6 s |
+| (c) historical pre-keyed gate run | 26 | 0 | 0 | 25 × 31 = 775 s | 778.6 s |
 
 Run (c)'s wall clock is almost entirely the rate-limit floor; local ONNX and
 retrieval work adds ~4 s across 30 questions because it is dominated by the
@@ -303,7 +305,7 @@ every report.
 | `eval/calibration_fit_set.json` | 30 question-level fit rows (`question_id`, `query`, `chunk_id`, `label`, `rerank_score`, `split`) |
 | `scripts/fit_calibration_gold.py` | human-gold fitter (production calibration) |
 | `scripts/fit_calibration.py` | provisional synthetic fitter, kept for comparison; overwrites the production artifact |
-| `eval-report.json` | final production run (c): per-question rows, aggregates, retrieval ablation, gates |
+| `eval-report.json` | current keyed production run: per-question rows, aggregates, retrieval ablation, gates |
 | `eval-report-baseline.json` | run (a): gate run with the provisional `0.2552` threshold |
 | `eval-report-forced.json` | run (b): forced-generation diagnostic, `gate_run: false` |
 | `eval-report-ablation.json` | vector-only/top-3 weakened run (R2 extractive generator), same schema |

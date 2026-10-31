@@ -1,10 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import {
-  getDocument,
-  GlobalWorkerOptions,
-  TextLayer,
-  type PDFDocumentProxy,
-  type RenderTask,
+import type {
+  PDFDocumentLoadingTask,
+  PDFDocumentProxy,
+  RenderTask,
 } from 'pdfjs-dist';
 import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
@@ -12,7 +10,20 @@ import { extractPage, resolveQuote, type ExtractedPage } from '../pdfText';
 import { pdfSourceOptions } from '../pdfSource';
 import type { Citation, Rect } from '../types';
 
-GlobalWorkerOptions.workerSrc = workerSrc;
+type PdfJs = typeof import('pdfjs-dist');
+
+// PDF.js is the largest dependency and the document pane already loads
+// asynchronously, so its parse/evaluation is deferred until this component
+// mounts instead of being part of the entry chunk. The module is loaded once.
+let pdfjsModule: Promise<PdfJs> | null = null;
+
+function loadPdfJs(): Promise<PdfJs> {
+  pdfjsModule ??= import('pdfjs-dist').then((module) => {
+    module.GlobalWorkerOptions.workerSrc = workerSrc;
+    return module;
+  });
+  return pdfjsModule;
+}
 
 export const HIGHLIGHT_NAME = 'docqa-citation';
 
@@ -178,10 +189,17 @@ export function PdfPane({
 
   useEffect(() => {
     let cancelled = false;
-    const task = getDocument(pdfSourceOptions(pdfUrl));
-    task.promise
+    let task: PDFDocumentLoadingTask | null = null;
+    loadPdfJs()
+      .then((pdfjs) => {
+        if (cancelled) {
+          return null;
+        }
+        task = pdfjs.getDocument(pdfSourceOptions(pdfUrl));
+        return task.promise;
+      })
       .then((loaded) => {
-        if (!cancelled) {
+        if (!cancelled && loaded) {
           setDocument(loaded);
         }
       })
@@ -192,7 +210,7 @@ export function PdfPane({
       });
     return () => {
       cancelled = true;
-      void task.destroy();
+      void task?.destroy();
     };
   }, [pdfUrl]);
 
@@ -229,6 +247,7 @@ export function PdfPane({
     let renderTask: RenderTask | null = null;
 
     const render = async (): Promise<void> => {
+      const pdfjs = await loadPdfJs();
       const page = await document.getPage(pageNo);
       if (cancelled) {
         return;
@@ -272,7 +291,7 @@ export function PdfPane({
       textLayerDiv.style.setProperty('--total-scale-factor', String(scale));
       textLayerDiv.style.setProperty('--scale-round-x', '1px');
       textLayerDiv.style.setProperty('--scale-round-y', '1px');
-      const textLayer = new TextLayer({
+      const textLayer = new pdfjs.TextLayer({
         textContentSource: content,
         container: textLayerDiv,
         viewport,

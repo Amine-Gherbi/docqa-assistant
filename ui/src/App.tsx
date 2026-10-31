@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -16,7 +18,6 @@ import {
   uploadedPdfUrl,
   warmApi,
 } from './api';
-import { EvalPage } from './components/EvalPage';
 import { PdfPane } from './components/PdfPane';
 import { TraceDrawer } from './components/TraceDrawer';
 import { UploadPanel } from './components/UploadPanel';
@@ -29,6 +30,14 @@ import {
 } from './demoPaper';
 import { formatQuoted } from './typography';
 import type { AskResponse, Citation, UploadDocument } from './types';
+
+// The evaluation view is reachable by URL but is not part of the home view's
+// first paint. Splitting it keeps its gallery fixture and report renderer out
+// of the entry chunk; the URL and rendered output are unchanged.
+const EvalPage = lazy(async () => {
+  const module = await import('./components/EvalPage');
+  return { default: module.EvalPage };
+});
 
 interface Selection {
   citation: Citation;
@@ -688,7 +697,19 @@ export default function App() {
   return (
     <div className="app">
       <SiteHeader onEval={onEval} />
-      {onEval ? <EvalPage /> : <AskPage />}
+      {onEval ? (
+        <Suspense
+          fallback={
+            <main className="workspace" aria-busy="true">
+              <p role="status">Loading the evaluation report…</p>
+            </main>
+          }
+        >
+          <EvalPage />
+        </Suspense>
+      ) : (
+        <AskPage />
+      )}
     </div>
   );
 }

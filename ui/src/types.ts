@@ -114,7 +114,8 @@ export interface AskResponse {
   insufficient_evidence: boolean;
   reason: string | null;
   passages: Passage[];
-  model: string;
+  /** Null for a recorded demo answer whose cache predates the current model. */
+  model: string | null;
   structured_output: 'tool' | 'json' | 'extractive';
   validation: ValidationReport;
   refusal_probability: number | null;
